@@ -299,3 +299,6 @@ pub fn verify(program: &Program) -> Result<Proof, Diagnostic> {
     }
     Ok(Proof { cleanup_by_exit })
 }
+
+/// Versioned typed-MIR producer envelope for differential compiler adapters.
+pub mod mir_v1;
