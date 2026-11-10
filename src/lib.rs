@@ -35,19 +35,49 @@ pub enum BorrowKind {
 /// A field projection must be resolved to a root unless disjointness is proven.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Op {
-    Init { owner: OwnerId, traits: Traits },
-    Read { owner: OwnerId },
-    Write { owner: OwnerId },
-    Borrow { owner: OwnerId, loan: LoanId, kind: BorrowKind },
-    WriteThrough { owner: OwnerId, loan: LoanId },
-    EndBorrow { loan: LoanId },
-    Move { from: OwnerId, into: OwnerId },
-    Copy { from: OwnerId, into: OwnerId },
-    Drop { owner: OwnerId },
-    TaskCaptureCopy { owner: OwnerId },
-    TaskCaptureMove { owner: OwnerId },
+    Init {
+        owner: OwnerId,
+        traits: Traits,
+    },
+    Read {
+        owner: OwnerId,
+    },
+    Write {
+        owner: OwnerId,
+    },
+    Borrow {
+        owner: OwnerId,
+        loan: LoanId,
+        kind: BorrowKind,
+    },
+    WriteThrough {
+        owner: OwnerId,
+        loan: LoanId,
+    },
+    EndBorrow {
+        loan: LoanId,
+    },
+    Move {
+        from: OwnerId,
+        into: OwnerId,
+    },
+    Copy {
+        from: OwnerId,
+        into: OwnerId,
+    },
+    Drop {
+        owner: OwnerId,
+    },
+    TaskCaptureCopy {
+        owner: OwnerId,
+    },
+    TaskCaptureMove {
+        owner: OwnerId,
+    },
     Suspend,
-    ActorHopBorrow { owner: OwnerId },
+    ActorHopBorrow {
+        owner: OwnerId,
+    },
     Return,
 }
 
@@ -73,7 +103,11 @@ pub struct Diagnostic {
 
 impl Diagnostic {
     fn at(code: &'static str, block: BlockId, operation: usize) -> Self {
-        Self { code, block, operation }
+        Self {
+            code,
+            block,
+            operation,
+        }
     }
 }
 
@@ -115,7 +149,9 @@ fn has_any_loan(s: &State, owner: OwnerId) -> bool {
 }
 
 fn has_mut_loan(s: &State, owner: OwnerId) -> bool {
-    s.loans.values().any(|loan| loan.owner == owner && loan.kind == BorrowKind::Mutable)
+    s.loans
+        .values()
+        .any(|loan| loan.owner == owner && loan.kind == BorrowKind::Mutable)
 }
 
 fn fresh_destination(s: &State, owner: OwnerId) -> bool {
@@ -137,81 +173,151 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
             }
             let acquisition = next_acquisition(state);
             state.ever_owned.insert(owner);
-            state.live.insert(owner, Owner { traits, acquisition });
+            state.live.insert(
+                owner,
+                Owner {
+                    traits,
+                    acquisition,
+                },
+            );
         }
         Op::Read { owner } => {
-            if !is_live(state, owner) { return Err(bad("E_USE_AFTER_MOVE_OR_DROP")); }
-            if has_mut_loan(state, owner) { return Err(bad("E_BORROW_CONFLICT")); }
+            if !is_live(state, owner) {
+                return Err(bad("E_USE_AFTER_MOVE_OR_DROP"));
+            }
+            if has_mut_loan(state, owner) {
+                return Err(bad("E_BORROW_CONFLICT"));
+            }
         }
         Op::Write { owner } => {
-            if !is_live(state, owner) { return Err(bad("E_USE_AFTER_MOVE_OR_DROP")); }
-            if has_any_loan(state, owner) { return Err(bad("E_BORROW_CONFLICT")); }
+            if !is_live(state, owner) {
+                return Err(bad("E_USE_AFTER_MOVE_OR_DROP"));
+            }
+            if has_any_loan(state, owner) {
+                return Err(bad("E_BORROW_CONFLICT"));
+            }
         }
         Op::Borrow { owner, loan, kind } => {
-            if !is_live(state, owner) { return Err(bad("E_USE_AFTER_MOVE_OR_DROP")); }
-            if state.ever_loaned.contains(&loan) { return Err(bad("E_LOAN_ID_REUSED")); }
-            if state.ever_loaned.len() >= MAX_LOANS { return Err(bad("E_LOAN_BUDGET")); }
-            if has_mut_loan(state, owner) || (kind == BorrowKind::Mutable && has_any_loan(state, owner)) {
+            if !is_live(state, owner) {
+                return Err(bad("E_USE_AFTER_MOVE_OR_DROP"));
+            }
+            if state.ever_loaned.contains(&loan) {
+                return Err(bad("E_LOAN_ID_REUSED"));
+            }
+            if state.ever_loaned.len() >= MAX_LOANS {
+                return Err(bad("E_LOAN_BUDGET"));
+            }
+            if has_mut_loan(state, owner)
+                || (kind == BorrowKind::Mutable && has_any_loan(state, owner))
+            {
                 return Err(bad("E_BORROW_CONFLICT"));
             }
             state.ever_loaned.insert(loan);
             state.loans.insert(loan, Loan { owner, kind });
         }
         Op::WriteThrough { owner, loan } => {
-            if !is_live(state, owner) { return Err(bad("E_USE_AFTER_MOVE_OR_DROP")); }
-            if !matches!(state.loans.get(&loan), Some(Loan { owner: o, kind: BorrowKind::Mutable }) if *o == owner) {
+            if !is_live(state, owner) {
+                return Err(bad("E_USE_AFTER_MOVE_OR_DROP"));
+            }
+            if !matches!(state.loans.get(&loan), Some(Loan { owner: o, kind: BorrowKind::Mutable }) if *o == owner)
+            {
                 return Err(bad("E_MUT_LOAN_REQUIRED"));
             }
         }
         Op::EndBorrow { loan } => {
-            if state.loans.remove(&loan).is_none() { return Err(bad("E_UNKNOWN_LOAN")); }
+            if state.loans.remove(&loan).is_none() {
+                return Err(bad("E_UNKNOWN_LOAN"));
+            }
         }
         Op::Move { from, into } => {
-            if !is_live(state, from) { return Err(bad("E_USE_AFTER_MOVE_OR_DROP")); }
-            if has_any_loan(state, from) { return Err(bad("E_BORROW_CONFLICT")); }
-            if !fresh_destination(state, into) { return Err(bad("E_OWNER_ID_REUSED_OR_BUDGET")); }
+            if !is_live(state, from) {
+                return Err(bad("E_USE_AFTER_MOVE_OR_DROP"));
+            }
+            if has_any_loan(state, from) {
+                return Err(bad("E_BORROW_CONFLICT"));
+            }
+            if !fresh_destination(state, into) {
+                return Err(bad("E_OWNER_ID_REUSED_OR_BUDGET"));
+            }
             let moved = state.live.remove(&from).expect("checked live");
             state.ever_owned.insert(into);
             state.live.insert(into, moved); // preserve original acquisition order
         }
         Op::Copy { from, into } => {
-            let source = state.live.get(&from).ok_or_else(|| bad("E_USE_AFTER_MOVE_OR_DROP"))?;
-            if !source.traits.is_copy { return Err(bad("E_COPY_PROOF_REQUIRED")); }
-            if has_mut_loan(state, from) { return Err(bad("E_BORROW_CONFLICT")); }
-            if !fresh_destination(state, into) { return Err(bad("E_OWNER_ID_REUSED_OR_BUDGET")); }
+            let source = state
+                .live
+                .get(&from)
+                .ok_or_else(|| bad("E_USE_AFTER_MOVE_OR_DROP"))?;
+            if !source.traits.is_copy {
+                return Err(bad("E_COPY_PROOF_REQUIRED"));
+            }
+            if has_mut_loan(state, from) {
+                return Err(bad("E_BORROW_CONFLICT"));
+            }
+            if !fresh_destination(state, into) {
+                return Err(bad("E_OWNER_ID_REUSED_OR_BUDGET"));
+            }
             let traits = source.traits;
             let acquisition = next_acquisition(state);
             state.ever_owned.insert(into);
-            state.live.insert(into, Owner { traits, acquisition });
+            state.live.insert(
+                into,
+                Owner {
+                    traits,
+                    acquisition,
+                },
+            );
         }
         Op::Drop { owner } => {
-            if !is_live(state, owner) { return Err(bad("E_USE_AFTER_MOVE_OR_DROP")); }
-            if has_any_loan(state, owner) { return Err(bad("E_BORROW_CONFLICT")); }
+            if !is_live(state, owner) {
+                return Err(bad("E_USE_AFTER_MOVE_OR_DROP"));
+            }
+            if has_any_loan(state, owner) {
+                return Err(bad("E_BORROW_CONFLICT"));
+            }
             state.live.remove(&owner);
         }
         Op::TaskCaptureCopy { owner } => {
-            let source = state.live.get(&owner).ok_or_else(|| bad("E_USE_AFTER_MOVE_OR_DROP"))?;
+            let source = state
+                .live
+                .get(&owner)
+                .ok_or_else(|| bad("E_USE_AFTER_MOVE_OR_DROP"))?;
             if !source.traits.is_copy || !source.traits.is_send {
                 return Err(bad("E_TASK_CAPTURE_PROOF"));
             }
-            if has_mut_loan(state, owner) { return Err(bad("E_BORROW_CONFLICT")); }
+            if has_mut_loan(state, owner) {
+                return Err(bad("E_BORROW_CONFLICT"));
+            }
         }
         Op::TaskCaptureMove { owner } => {
-            let source = state.live.get(&owner).ok_or_else(|| bad("E_USE_AFTER_MOVE_OR_DROP"))?;
-            if !source.traits.is_send { return Err(bad("E_TASK_CAPTURE_PROOF")); }
-            if has_any_loan(state, owner) { return Err(bad("E_BORROW_CONFLICT")); }
+            let source = state
+                .live
+                .get(&owner)
+                .ok_or_else(|| bad("E_USE_AFTER_MOVE_OR_DROP"))?;
+            if !source.traits.is_send {
+                return Err(bad("E_TASK_CAPTURE_PROOF"));
+            }
+            if has_any_loan(state, owner) {
+                return Err(bad("E_BORROW_CONFLICT"));
+            }
             state.live.remove(&owner);
         }
         Op::Suspend => {
             // Pinned continuation ownership is a future separate proof profile.
-            if !state.loans.is_empty() { return Err(bad("E_SUSPEND_WITH_LIVE_LOAN")); }
+            if !state.loans.is_empty() {
+                return Err(bad("E_SUSPEND_WITH_LIVE_LOAN"));
+            }
         }
         Op::ActorHopBorrow { owner } => {
-            if !is_live(state, owner) { return Err(bad("E_USE_AFTER_MOVE_OR_DROP")); }
+            if !is_live(state, owner) {
+                return Err(bad("E_USE_AFTER_MOVE_OR_DROP"));
+            }
             return Err(bad("E_ACTOR_BORROW_ESCAPE"));
         }
         Op::Return => {
-            if !state.loans.is_empty() { return Err(bad("E_LOAN_ESCAPE")); }
+            if !state.loans.is_empty() {
+                return Err(bad("E_LOAN_ESCAPE"));
+            }
         }
     }
     Ok(())
@@ -276,30 +382,49 @@ pub fn verify(program: &Program) -> Result<Proof, Diagnostic> {
         }
     }
     let mut indegrees = BTreeMap::new();
-    for &id in blocks.keys() { indegrees.insert(id, 0usize); }
+    for &id in blocks.keys() {
+        indegrees.insert(id, 0usize);
+    }
     let mut edges = 0usize;
     for block in blocks.values() {
-        if block.operations.len() > MAX_OPERATIONS_PER_BLOCK { return Err(structural("E_CFG_BUDGET")); }
+        if block.operations.len() > MAX_OPERATIONS_PER_BLOCK {
+            return Err(structural("E_CFG_BUDGET"));
+        }
         let mut seen = BTreeSet::new();
         for &next in &block.successors {
             if !blocks.contains_key(&next) || !seen.insert(next) {
                 return Err(structural("E_CFG_EDGE"));
             }
             edges += 1;
-            if edges > MAX_EDGES { return Err(structural("E_CFG_BUDGET")); }
+            if edges > MAX_EDGES {
+                return Err(structural("E_CFG_BUDGET"));
+            }
             *indegrees.get_mut(&next).expect("validated successor") += 1;
         }
-        let returns = block.operations.iter().position(|op| matches!(op, Op::Return));
+        let returns = block
+            .operations
+            .iter()
+            .position(|op| matches!(op, Op::Return));
         if block.successors.is_empty() {
             if returns != Some(block.operations.len().saturating_sub(1)) {
-                return Err(Diagnostic::at("E_IMPLICIT_EXIT", block.id, block.operations.len()));
+                return Err(Diagnostic::at(
+                    "E_IMPLICIT_EXIT",
+                    block.id,
+                    block.operations.len(),
+                ));
             }
         } else if returns.is_some() {
-            return Err(Diagnostic::at("E_RETURN_WITH_SUCCESSOR", block.id, returns.unwrap_or(0)));
+            return Err(Diagnostic::at(
+                "E_RETURN_WITH_SUCCESSOR",
+                block.id,
+                returns.unwrap_or(0),
+            ));
         }
     }
-    let mut ready: BTreeSet<BlockId> = indegrees.iter()
-        .filter_map(|(&id, &count)| if count == 0 { Some(id) } else { None }).collect();
+    let mut ready: BTreeSet<BlockId> = indegrees
+        .iter()
+        .filter_map(|(&id, &count)| if count == 0 { Some(id) } else { None })
+        .collect();
     let mut ordering = Vec::new();
     while let Some(&id) = ready.iter().next() {
         ready.remove(&id);
@@ -307,7 +432,9 @@ pub fn verify(program: &Program) -> Result<Proof, Diagnostic> {
         for next in &blocks[&id].successors {
             let degree = indegrees.get_mut(next).expect("validated successor");
             *degree -= 1;
-            if *degree == 0 { ready.insert(*next); }
+            if *degree == 0 {
+                ready.insert(*next);
+            }
         }
     }
     if ordering.len() != blocks.len() {
@@ -317,7 +444,9 @@ pub fn verify(program: &Program) -> Result<Proof, Diagnostic> {
     incoming.insert(program.entry, vec![State::default()]);
     let mut cleanup_by_exit = BTreeMap::new();
     for id in ordering {
-        let paths = incoming.remove(&id).ok_or_else(|| Diagnostic::at("E_CFG_UNREACHABLE", id, 0))?;
+        let paths = incoming
+            .remove(&id)
+            .ok_or_else(|| Diagnostic::at("E_CFG_UNREACHABLE", id, 0))?;
         let first = paths.first().expect("nonempty incoming");
         if paths.iter().any(|p| p != first) {
             return Err(Diagnostic::at("E_CFG_JOIN_UNPROVEN", id, 0));
@@ -328,8 +457,11 @@ pub fn verify(program: &Program) -> Result<Proof, Diagnostic> {
             apply(&mut state, op, id, index)?;
         }
         if block.successors.is_empty() {
-            let mut live: Vec<_> = state.live.iter()
-                .map(|(&owner, value)| (value.acquisition, owner)).collect();
+            let mut live: Vec<_> = state
+                .live
+                .iter()
+                .map(|(&owner, value)| (value.acquisition, owner))
+                .collect();
             live.sort_by(|a, b| b.cmp(a));
             cleanup_by_exit.insert(id, live.into_iter().map(|(_, owner)| owner).collect());
         }
