@@ -391,6 +391,18 @@ fn verify_internal(
     if program.blocks.is_empty() || program.blocks.len() > MAX_BLOCKS {
         return Err(structural("E_CFG_BUDGET"));
     }
+    // Check caller-owned vector lengths before scanning operations, owner
+    // definitions or edges. An oversized block of repeated reads must not
+    // consume unbounded work before reaching its eventual budget rejection.
+    let mut preflight_edges = 0usize;
+    for block in &program.blocks {
+        preflight_edges = preflight_edges
+            .checked_add(block.successors.len())
+            .ok_or_else(|| structural("E_CFG_BUDGET"))?;
+        if block.operations.len() > MAX_OPERATIONS_PER_BLOCK || preflight_edges > MAX_EDGES {
+            return Err(structural("E_CFG_BUDGET"));
+        }
+    }
     let mut blocks = BTreeMap::new();
     for block in &program.blocks {
         if blocks.insert(block.id, block).is_some() {
