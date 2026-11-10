@@ -205,3 +205,47 @@ fn accepts_explicit_loan_release_before_suspension() {
     mir.expected_instruction_ids.extend([3, 4, 5]);
     verify_mir(&mir).expect("released shared loan before suspension");
 }
+
+#[test]
+fn rejects_oversized_cfg_before_allocating_internal_copy() {
+    let mut mir = good();
+    mir.blocks = (0..4097)
+        .map(|id| MirBlock {
+            id,
+            instructions: Vec::new(),
+            successors: Vec::new(),
+        })
+        .collect();
+    reject_invalid(&mir, "E_MIR_CFG_BUDGET");
+}
+
+#[test]
+fn rejects_empty_cfg_even_with_inventory_claims() {
+    let mut mir = good();
+    mir.blocks.clear();
+    reject_invalid(&mir, "E_MIR_CFG_BUDGET");
+}
+
+#[test]
+fn reports_duplicate_owner_definition_from_canonical_engine() {
+    let mut mir = good();
+    mir.blocks[0].instructions.insert(
+        1,
+        instruction(
+            3,
+            Effect::Ownership,
+            Op::Init {
+                owner: 1,
+                traits: Traits {
+                    is_copy: false,
+                    is_send: false,
+                },
+            },
+        ),
+    );
+    mir.expected_instruction_ids.push(3);
+    match verify_mir(&mir).unwrap_err() {
+        MirError::Unsafe(diagnostic) => assert_eq!(diagnostic.code, "E_OWNER_DEF_REUSED"),
+        _ => panic!("expected global identity collision"),
+    }
+}
