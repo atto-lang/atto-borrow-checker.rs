@@ -16,6 +16,8 @@ const MAX_LOANS: usize = 1024;
 const MAX_BLOCKS: usize = 4096;
 const MAX_EDGES: usize = 16384;
 const MAX_OPERATIONS_PER_BLOCK: usize = 1024;
+// An opt-in verifier trace must be bounded independently of the CFG budgets.
+const MAX_SHADOW_EVENTS_V0: usize = 65_536;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Traits {
@@ -254,9 +256,12 @@ pub fn verify(program: &Program) -> Result<Proof, Diagnostic> {
 }
 
 /// An opt-in observation hook integrated into the canonical verification loop.
-/// Observations are emitted only AFTER the current operation validates.
-/// An error from the consumer aborts verification before Proof can be returned.
-/// This is an operation trace, not independent source/AST provenance proof.
+/// Observations are buffered during the same CFG traversal and emitted only
+/// after the complete function has passed verification. This prevents a later
+/// rejected block from leaking earlier tentative events. The buffer has an
+/// explicit cap, and overflow fails closed in shadow mode only. If a consumer
+/// returns an error, no Proof is returned; consumer side effects cannot be
+/// rolled back. This is not independent source/AST provenance proof.
 pub fn verify_with_shadow_v0(
     program: &Program,
     sink: &mut dyn FnMut(ShadowEventV0) -> Result<(), Diagnostic>,
@@ -324,6 +329,8 @@ fn verify_internal(
     }
     let mut incoming = BTreeMap::<BlockId, Vec<State>>::new();
     incoming.insert(program.entry, vec![State::default()]);
+    // None on the ordinary fast path: no trace allocation or second traversal.
+    let mut staged_events = sink.as_ref().map(|_| Vec::<ShadowEventV0>::new());
     let mut cleanup_by_exit = BTreeMap::new();
     for id in ordering {
         let paths = incoming.remove(&id).ok_or_else(|| Diagnostic::at("E_CFG_UNREACHABLE", id, 0))?;
@@ -335,9 +342,12 @@ fn verify_internal(
         let block = blocks[&id];
         for (index, op) in block.operations.iter().enumerate() {
             apply(&mut state, op, id, index)?;
-            if let Some(observer) = sink.as_deref_mut() {
+            if let Some(events) = staged_events.as_mut() {
+                if events.len() >= MAX_SHADOW_EVENTS_V0 {
+                    return Err(Diagnostic::at("E_SHADOW_EVENT_BUDGET", id, index));
+                }
                 let (kind, owner) = shadow_kind(op);
-                observer(ShadowEventV0 { block: id, operation: index, kind, owner })?;
+                events.push(ShadowEventV0 { block: id, operation: index, kind, owner });
             }
         }
         if block.successors.is_empty() {
@@ -350,5 +360,14 @@ fn verify_internal(
             incoming.entry(next).or_default().push(state.clone());
         }
     }
-    Ok(Proof { cleanup_by_exit })
+    let proof = Proof { cleanup_by_exit };
+    // Publish only a complete, successfully checked function's event stream.
+    // A failing consumer prevents returning Proof; observer side effects are
+    // not a substitute for the independently verified proof object.
+    if let Some(observer) = sink.as_deref_mut() {
+        if let Some(events) = staged_events {
+            for event in events { observer(event)?; }
+        }
+    }
+    Ok(proof)
 }
