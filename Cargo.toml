@@ -1,0 +1,10 @@
+[package]
+name = "atto-borrow-checker"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Conservative canonical AttoLang ownership/borrow checking oracle"
+
+[lib]
+name = "atto_borrow_checker"
+path = "src/lib.rs"
