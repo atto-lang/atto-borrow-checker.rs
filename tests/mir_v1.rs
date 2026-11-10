@@ -137,16 +137,11 @@ fn propagates_semantic_use_after_move_error() {
     let mut mir = good();
     mir.blocks[0].instructions.insert(
         1,
-        instruction(
-            3,
-            Effect::Ownership,
-            Op::Move { from: 1, into: 2 },
-        ),
+        instruction(3, Effect::Ownership, Op::Move { from: 1, into: 2 }),
     );
-    mir.blocks[0].instructions.insert(
-        2,
-        instruction(4, Effect::Ownership, Op::Read { owner: 1 }),
-    );
+    mir.blocks[0]
+        .instructions
+        .insert(2, instruction(4, Effect::Ownership, Op::Read { owner: 1 }));
     mir.expected_instruction_ids.extend([3, 4]);
     let error = verify_mir(&mir).unwrap_err();
     match error {
