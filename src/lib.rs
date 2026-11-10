@@ -81,6 +81,34 @@ impl Diagnostic {
 /// This is a *proposed* plan; the compiler must independently prove all
 /// destruction, unwinding and runtime callback paths before emitting code.
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShadowEventV0 {
+    pub block: BlockId,
+    pub operation: usize,
+    pub kind: &'static str,
+    pub owner: Option<OwnerId>,
+}
+
+fn shadow_kind(op: &Op) -> (&'static str, Option<OwnerId>) {
+    match *op {
+        Op::Init { owner, .. } => ("INIT", Some(owner)),
+        Op::Read { owner } => ("READ", Some(owner)),
+        Op::Write { owner } => ("WRITE", Some(owner)),
+        Op::Borrow { owner, kind: BorrowKind::Shared, .. } => ("BORROW_SHARED", Some(owner)),
+        Op::Borrow { owner, kind: BorrowKind::Mutable, .. } => ("BORROW_MUT", Some(owner)),
+        Op::WriteThrough { owner, .. } => ("WRITE_VIA_MUT", Some(owner)),
+        Op::EndBorrow { .. } => ("END_BORROW", None),
+        Op::Move { from, .. } => ("MOVE", Some(from)),
+        Op::Copy { from, .. } => ("COPY", Some(from)),
+        Op::Drop { owner } => ("DROP", Some(owner)),
+        Op::TaskCaptureCopy { owner } => ("TASK_COPY", Some(owner)),
+        Op::TaskCaptureMove { owner } => ("TASK_MOVE", Some(owner)),
+        Op::Suspend => ("SUSPEND_SAFE", None),
+        Op::ActorHopBorrow { owner } => ("ACTOR_HOP_BORROW", Some(owner)),
+        Op::Return => ("RETURN", None),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Proof {
     pub cleanup_by_exit: BTreeMap<BlockId, Vec<OwnerId>>,
 }
@@ -222,6 +250,24 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
 /// An independently validated, immutable typed compiler IR is required before
 /// invoking this API. Unproven syntax or effects must fail closed in the frontend.
 pub fn verify(program: &Program) -> Result<Proof, Diagnostic> {
+    verify_internal(program, None)
+}
+
+/// An opt-in observation hook integrated into the canonical verification loop.
+/// Observations are emitted only AFTER the current operation validates.
+/// An error from the consumer aborts verification before Proof can be returned.
+/// This is an operation trace, not independent source/AST provenance proof.
+pub fn verify_with_shadow_v0(
+    program: &Program,
+    sink: &mut dyn FnMut(ShadowEventV0) -> Result<(), Diagnostic>,
+) -> Result<Proof, Diagnostic> {
+    verify_internal(program, Some(sink))
+}
+
+fn verify_internal(
+    program: &Program,
+    mut sink: Option<&mut dyn FnMut(ShadowEventV0) -> Result<(), Diagnostic>>,
+) -> Result<Proof, Diagnostic> {
     let structural = |code| Diagnostic::at(code, program.entry, 0);
     if program.blocks.is_empty() || program.blocks.len() > MAX_BLOCKS {
         return Err(structural("E_CFG_BUDGET"));
@@ -249,9 +295,12 @@ pub fn verify(program: &Program) -> Result<Proof, Diagnostic> {
             if edges > MAX_EDGES { return Err(structural("E_CFG_BUDGET")); }
             *indegrees.get_mut(&next).expect("validated successor") += 1;
         }
-        let returns = block.operations.iter().position(|op| matches!(op, Op::Return));
+        let return_positions: Vec<_> = block.operations.iter().enumerate()
+            .filter_map(|(index, op)| if matches!(op, Op::Return) { Some(index) } else { None })
+            .collect();
+        let returns = return_positions.first().copied();
         if block.successors.is_empty() {
-            if returns != Some(block.operations.len().saturating_sub(1)) {
+            if return_positions.len() != 1 || returns != Some(block.operations.len() - 1) {
                 return Err(Diagnostic::at("E_IMPLICIT_EXIT", block.id, block.operations.len()));
             }
         } else if returns.is_some() {
@@ -286,6 +335,10 @@ pub fn verify(program: &Program) -> Result<Proof, Diagnostic> {
         let block = blocks[&id];
         for (index, op) in block.operations.iter().enumerate() {
             apply(&mut state, op, id, index)?;
+            if let Some(observer) = sink.as_deref_mut() {
+                let (kind, owner) = shadow_kind(op);
+                observer(ShadowEventV0 { block: id, operation: index, kind, owner })?;
+            }
         }
         if block.successors.is_empty() {
             let mut live: Vec<_> = state.live.iter()
