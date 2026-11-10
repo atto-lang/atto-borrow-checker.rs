@@ -235,6 +235,46 @@ pub fn verify(program: &Program) -> Result<Proof, Diagnostic> {
     if !blocks.contains_key(&program.entry) {
         return Err(structural("E_CFG_ENTRY"));
     }
+    // Owner/Loan definitions must be unique across the entire function CFG,
+    // not merely unique in each path's local State. In particular, two
+    // alternative branches cannot mint the same numeric identity and then
+    // accidentally merge into identical state snapshots.
+    //
+    // Real SSA phi nodes will need separately minted values and a verified
+    // merge mapping. This restricted V0 conservatively rejects any ID reuse.
+    let mut owner_definitions = BTreeSet::new();
+    let mut loan_definitions = BTreeSet::new();
+    for block in blocks.values() {
+        for (index, op) in block.operations.iter().enumerate() {
+            let owner = match op {
+                Op::Init { owner, .. } => Some(*owner),
+                Op::Move { into, .. } | Op::Copy { into, .. } => Some(*into),
+                _ => None,
+            };
+            if let Some(id) = owner {
+                if id == 0 {
+                    return Err(Diagnostic::at("E_OWNER_ID_ZERO", block.id, index));
+                }
+                if !owner_definitions.insert(id) {
+                    return Err(Diagnostic::at("E_OWNER_DEF_REUSED", block.id, index));
+                }
+                if owner_definitions.len() > MAX_OWNERS {
+                    return Err(Diagnostic::at("E_OWNER_ID_BUDGET", block.id, index));
+                }
+            }
+            if let Op::Borrow { loan, .. } = op {
+                if *loan == 0 {
+                    return Err(Diagnostic::at("E_LOAN_ID_ZERO", block.id, index));
+                }
+                if !loan_definitions.insert(*loan) {
+                    return Err(Diagnostic::at("E_LOAN_DEF_REUSED", block.id, index));
+                }
+                if loan_definitions.len() > MAX_LOANS {
+                    return Err(Diagnostic::at("E_LOAN_BUDGET", block.id, index));
+                }
+            }
+        }
+    }
     let mut indegrees = BTreeMap::new();
     for &id in blocks.keys() { indegrees.insert(id, 0usize); }
     let mut edges = 0usize;
