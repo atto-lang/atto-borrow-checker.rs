@@ -10,6 +10,7 @@ use crate::{verify, Block, Diagnostic, Op, Program, Proof};
 
 pub const CONTRACT_VERSION: &str = "atto-borrow-mir-v1";
 const MAX_MIR_OPERATIONS: usize = 100_000;
+const MAX_MIR_BLOCKS: usize = 4096;
 
 /// Metadata needed for reproducibility, NOT cryptographic attestation.
 /// Trusted CI must bind these claims to checked-out bytes independently.
@@ -86,6 +87,11 @@ fn expected_effect(op: &Op) -> Effect {
 pub fn verify_mir(function: &MirFunction) -> Result<Proof, MirError> {
     if function.version != CONTRACT_VERSION {
         return Err(MirError::Invalid("E_MIR_VERSION"));
+    }
+    // Bound the input before allocating the internal CFG copy. The underlying
+    // V0 verifier checks the same block limit, but that happens after cloning.
+    if function.blocks.is_empty() || function.blocks.len() > MAX_MIR_BLOCKS {
+        return Err(MirError::Invalid("E_MIR_CFG_BUDGET"));
     }
     let producer = &function.producer;
     if !is_hex(&producer.compiler_git_sha, 40)
