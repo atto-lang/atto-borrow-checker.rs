@@ -11,3 +11,7 @@ name = "atto_borrow_checker"
 path = "src/lib.rs"
 
 [dependencies]
+
+[lints.clippy]
+# Workspace style prefers explicit returns in named functions.
+needless_return = "allow"

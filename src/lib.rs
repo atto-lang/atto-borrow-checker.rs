@@ -129,8 +129,16 @@ fn shadow_kind(op: &Op) -> (&'static str, Option<OwnerId>) {
         Op::Init { owner, .. } => ("INIT", Some(owner)),
         Op::Read { owner } => ("READ", Some(owner)),
         Op::Write { owner } => ("WRITE", Some(owner)),
-        Op::Borrow { owner, kind: BorrowKind::Shared, .. } => ("BORROW_SHARED", Some(owner)),
-        Op::Borrow { owner, kind: BorrowKind::Mutable, .. } => ("BORROW_MUT", Some(owner)),
+        Op::Borrow {
+            owner,
+            kind: BorrowKind::Shared,
+            ..
+        } => ("BORROW_SHARED", Some(owner)),
+        Op::Borrow {
+            owner,
+            kind: BorrowKind::Mutable,
+            ..
+        } => ("BORROW_MUT", Some(owner)),
         Op::WriteThrough { owner, .. } => ("WRITE_VIA_MUT", Some(owner)),
         Op::EndBorrow { .. } => ("END_BORROW", None),
         Op::Move { from, .. } => ("MOVE", Some(from)),
@@ -377,7 +385,7 @@ pub fn verify_with_shadow_v0(
 
 fn verify_internal(
     program: &Program,
-    mut sink: Option<&mut dyn FnMut(ShadowEventV0) -> Result<(), Diagnostic>>,
+    sink: Option<&mut dyn FnMut(ShadowEventV0) -> Result<(), Diagnostic>>,
 ) -> Result<Proof, Diagnostic> {
     let structural = |code| Diagnostic::at(code, program.entry, 0);
     if program.blocks.is_empty() || program.blocks.len() > MAX_BLOCKS {
@@ -517,7 +525,12 @@ fn verify_internal(
                     return Err(Diagnostic::at("E_SHADOW_EVENT_BUDGET", id, index));
                 }
                 let (kind, owner) = shadow_kind(op);
-                events.push(ShadowEventV0 { block: id, operation: index, kind, owner });
+                events.push(ShadowEventV0 {
+                    block: id,
+                    operation: index,
+                    kind,
+                    owner,
+                });
             }
         }
         if block.successors.is_empty() {
@@ -537,9 +550,11 @@ fn verify_internal(
     // Publish only a complete, successfully checked function's event stream.
     // A failing consumer prevents returning Proof; observer side effects are
     // not a substitute for the independently verified proof object.
-    if let Some(observer) = sink.as_deref_mut() {
+    if let Some(observer) = sink {
         if let Some(events) = staged_events {
-            for event in events { observer(event)?; }
+            for event in events {
+                observer(event)?;
+            }
         }
     }
     Ok(proof)

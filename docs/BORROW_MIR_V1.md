@@ -1,6 +1,6 @@
 # atto-borrow-mir-v1: native fast paths, strict checker bridge
 
-Status: **DRAFT; SOURCE_AUTHORED, NOT_EXECUTED, NOT_CERTIFIED**.
+Status: **experimental library baseline; local model tests executed, NOT guest-certified**. See [integration evidence](INTEGRATION_BASELINE.md).
 
 This draft adds `src/mir_v1.rs` to the existing [PR #1](https://github.com/ores-truffle-oreslang/atto-borrow-checker.rs/pull/1) acyclic canonical checker. The experimental field-sensitive cyclic CFG in [PR #2](https://github.com/ores-truffle-oreslang/atto-borrow-checker.rs/pull/2) is not silently merged or promoted; its Place/projection/loop work needs semantic reconciliation. No backend integration has been performed.
 
@@ -29,6 +29,8 @@ source -> name/type/effect resolution -> typed HIR / typed MIR
 `mir_v1::verify_mir(MirFunction)` accepts versioned `Producer`, entry block, CFG blocks and compiler-identified `Instruction` records containing `instruction_id`, `source_node_id`, `Effect` and a closed ownership `Op`.
 
 `expected_instruction_ids` must come from a distinct census of validated typed MIR, not a copy of the event stream. The bridge checks uniqueness and set equality, effect classifications and malformed provenance *shape*, then invokes the restricted canonical ownership verifier.
+
+`verify_mir_with_shadow_v0` uses the same envelope validation and then the transactional shadow verifier. Malformed inventories, invalid CFGs and budget failures produce no observer events; a consumer error prevents returning a proof, but consumer side effects cannot be rolled back. CFG edge and per-block instruction budgets are checked before allocating the lowered CFG copy.
 
 The bridge **cannot independently establish**:
 - that its caller derived `Copy` and `Send` from real type-checker facts;

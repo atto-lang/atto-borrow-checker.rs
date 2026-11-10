@@ -6,7 +6,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::{verify, Block, Diagnostic, Op, Program, Proof};
+use crate::{verify, verify_with_shadow_v0, Block, Diagnostic, Op, Program, Proof, ShadowEventV0};
 
 pub const CONTRACT_VERSION: &str = "atto-borrow-mir-v1";
 const MAX_MIR_OPERATIONS: usize = 100_000;
@@ -85,6 +85,20 @@ fn expected_effect(op: &Op) -> Effect {
 /// Success is a MODEL result, not compiled-guest execution or verified
 /// source-to-MIR-to-machine-code completeness.
 pub fn verify_mir(function: &MirFunction) -> Result<Proof, MirError> {
+    return verify(&validate_and_lower(function)?).map_err(MirError::Unsafe);
+}
+
+/// Validate the complete MIR inventory before observing the verified CFG.
+/// Invalid inventories and unsafe graphs publish no events. A sink failure
+/// prevents a proof, but already performed observer side effects cannot roll back.
+pub fn verify_mir_with_shadow_v0(
+    function: &MirFunction,
+    sink: &mut dyn FnMut(ShadowEventV0) -> Result<(), Diagnostic>,
+) -> Result<Proof, MirError> {
+    return verify_with_shadow_v0(&validate_and_lower(function)?, sink).map_err(MirError::Unsafe);
+}
+
+fn validate_and_lower(function: &MirFunction) -> Result<Program, MirError> {
     if function.version != CONTRACT_VERSION {
         return Err(MirError::Invalid("E_MIR_VERSION"));
     }
@@ -92,6 +106,19 @@ pub fn verify_mir(function: &MirFunction) -> Result<Proof, MirError> {
     // V0 verifier checks the same block limit, but that happens after cloning.
     if function.blocks.is_empty() || function.blocks.len() > MAX_MIR_BLOCKS {
         return Err(MirError::Invalid("E_MIR_CFG_BUDGET"));
+    }
+    // Preflight every vector length before cloning any caller-owned CFG data.
+    let mut edges = 0usize;
+    let mut operations = 0usize;
+    for block in &function.blocks {
+        edges = edges.saturating_add(block.successors.len());
+        operations = operations.saturating_add(block.instructions.len());
+        if block.instructions.len() > crate::MAX_OPERATIONS_PER_BLOCK || edges > crate::MAX_EDGES {
+            return Err(MirError::Invalid("E_MIR_CFG_BUDGET"));
+        }
+        if operations > MAX_MIR_OPERATIONS {
+            return Err(MirError::Invalid("E_MIR_INVENTORY_BUDGET"));
+        }
     }
     let producer = &function.producer;
     if !is_hex(&producer.compiler_git_sha, 40)
@@ -145,9 +172,8 @@ pub fn verify_mir(function: &MirFunction) -> Result<Proof, MirError> {
     if expected != observed {
         return Err(MirError::Invalid("E_MIR_INCOMPLETE_INVENTORY"));
     }
-    verify(&Program {
+    return Ok(Program {
         entry: function.entry,
         blocks,
-    })
-    .map_err(MirError::Unsafe)
+    });
 }

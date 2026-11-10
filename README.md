@@ -13,10 +13,14 @@ See [hybrid integration design](docs/HYBRID_COMPILER_INTEGRATION.md).
 `src/lib.rs` implements a deterministic, bounded **V0 CFG ownership oracle** with move/copy/drop, shared/exclusive loans, task capture Copy and Send distinctions, conservative suspension and actor-hop fences, branch joins, and exit cleanup-order proposals. It is intentionally not a complete compiler or actor lifetime checker.
 
 ```sh
-cargo test --all-targets
-cargo clippy --all-targets
+cargo fmt --all -- --check
+cargo clippy --all-targets --locked -- -D warnings
+cargo test --all-targets --locked
+cargo test --all-targets --locked --release
 ```
 
-No external Rust dependencies are required. The tests are source-authored and remain **NOT_EXECUTED / NOT_CERTIFIED** until a runner executes this exact commit. The crate does not parse .atto, verify type trait provenance, support cyclic CFG loops, prove pinned continuations, or integrate into production backend code generation. Do not promote host-only assertions to guest compiler certification.
+No external Rust dependencies are required. The reconciled baseline has executed local Rust tests; see [integration evidence and remaining work](docs/INTEGRATION_BASELINE.md). These are library/model tests, **not guest compiler certification**. The crate does not parse .atto, verify type trait provenance, support cyclic CFG loops, prove pinned continuations, or integrate into production backend code generation. Do not promote host-only assertions to guest compiler certification.
+
+`mir_v1::verify_mir_with_shadow_v0` validates the full operation inventory and input budgets before canonical verification, and publishes observations only after the entire CFG succeeds. Native compiler adapters remain responsible for independently deriving the complete typed inventory.
 
 Related work: [AttoLang shared conformance](https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/pull/646) and [broader Rust static analysis](https://github.com/ores-truffle-oreslang/oreslang-static-analysis.rs).

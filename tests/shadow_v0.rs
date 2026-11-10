@@ -1,24 +1,38 @@
 use atto_borrow_checker::{
-    verify, verify_with_shadow_v0, Block, Diagnostic, Op, Program, ShadowEventV0, Traits
+    verify, verify_with_shadow_v0, Block, Diagnostic, Op, Program, ShadowEventV0, Traits,
 };
 
 fn graph(ops: Vec<Op>) -> Program {
-    Program { entry: 0, blocks: vec![Block { id: 0, operations: ops, successors: vec![] }] }
+    Program {
+        entry: 0,
+        blocks: vec![Block {
+            id: 0,
+            operations: ops,
+            successors: vec![],
+        }],
+    }
 }
 
 #[test]
 fn shadow_reports_only_accepted_inpass_operations() {
     let p = graph(vec![
-        Op::Init { owner: 7, traits: Traits { is_copy: false, is_send: false } },
+        Op::Init {
+            owner: 7,
+            traits: Traits {
+                is_copy: false,
+                is_send: false,
+            },
+        },
         Op::Read { owner: 7 },
-        Op::Return
+        Op::Return,
     ]);
     let expected = verify(&p).unwrap();
     let mut events: Vec<ShadowEventV0> = vec![];
     let traced = verify_with_shadow_v0(&p, &mut |ev| {
         events.push(ev);
         Ok(())
-    }).unwrap();
+    })
+    .unwrap();
     assert_eq!(traced, expected);
     assert_eq!(events.len(), 3);
     assert_eq!(events[0].kind, "INIT");
@@ -36,7 +50,8 @@ fn rejected_operation_is_not_recorded_as_accepted() {
     let error = verify_with_shadow_v0(&p, &mut |ev| {
         events.push(ev);
         Ok(())
-    }).unwrap_err();
+    })
+    .unwrap_err();
     assert_eq!(error.code, "E_USE_AFTER_MOVE_OR_DROP");
     assert!(events.is_empty());
 }
@@ -45,8 +60,13 @@ fn rejected_operation_is_not_recorded_as_accepted() {
 fn consumer_error_prevents_a_successful_proof() {
     let p = graph(vec![Op::Return]);
     let denied = verify_with_shadow_v0(&p, &mut |_event| {
-        Err(Diagnostic { code: "E_SHADOW_CONSUMER", block: 0, operation: 0 })
-    }).unwrap_err();
+        Err(Diagnostic {
+            code: "E_SHADOW_CONSUMER",
+            block: 0,
+            operation: 0,
+        })
+    })
+    .unwrap_err();
     assert_eq!(denied.code, "E_SHADOW_CONSUMER");
 }
 

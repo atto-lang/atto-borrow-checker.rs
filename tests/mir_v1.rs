@@ -244,3 +244,89 @@ fn reports_duplicate_owner_definition_from_canonical_engine() {
         _ => panic!("expected global identity collision"),
     }
 }
+
+#[test]
+fn verified_mir_shadow_matches_plain_cleanup_and_publishes_complete_trace() {
+    let mir = good();
+    let mut events = Vec::new();
+    let result = atto_borrow_checker::mir_v1::verify_mir_with_shadow_v0(&mir, &mut |event| {
+        events.push(event);
+        Ok(())
+    });
+    assert_eq!(result, verify_mir(&mir));
+    assert_eq!(
+        events.iter().map(|event| event.kind).collect::<Vec<_>>(),
+        vec!["INIT", "RETURN"]
+    );
+}
+
+#[test]
+fn invalid_inventory_never_publishes_shadow_events() {
+    let mut mir = good();
+    mir.expected_instruction_ids.push(3);
+    let mut events = Vec::new();
+    let result = atto_borrow_checker::mir_v1::verify_mir_with_shadow_v0(&mir, &mut |event| {
+        events.push(event);
+        Ok(())
+    });
+    assert_eq!(result, Err(MirError::Invalid("E_MIR_INCOMPLETE_INVENTORY")));
+    assert!(events.is_empty());
+}
+
+#[test]
+fn unsafe_mir_never_publishes_shadow_events() {
+    let mut mir = good();
+    mir.expected_instruction_ids.extend([3, 4]);
+    mir.blocks[0]
+        .instructions
+        .insert(1, instruction(3, Effect::Ownership, Op::Drop { owner: 1 }));
+    mir.blocks[0]
+        .instructions
+        .insert(2, instruction(4, Effect::Ownership, Op::Read { owner: 1 }));
+    let mut events = Vec::new();
+    let result = atto_borrow_checker::mir_v1::verify_mir_with_shadow_v0(&mir, &mut |event| {
+        events.push(event);
+        Ok(())
+    });
+    assert!(
+        matches!(result, Err(MirError::Unsafe(error)) if error.code == "E_USE_AFTER_MOVE_OR_DROP")
+    );
+    assert!(events.is_empty());
+}
+
+#[test]
+fn mir_observer_failure_does_not_return_proof() {
+    let result = atto_borrow_checker::mir_v1::verify_mir_with_shadow_v0(&good(), &mut |_| {
+        Err(atto_borrow_checker::Diagnostic {
+            code: "E_OBSERVER",
+            block: 0,
+            operation: 0,
+        })
+    });
+    assert!(matches!(result, Err(MirError::Unsafe(error)) if error.code == "E_OBSERVER"));
+}
+
+#[test]
+fn oversized_successor_vector_is_rejected_before_lowering() {
+    let mut mir = good();
+    mir.blocks[0].successors = vec![0; 16_385];
+    reject_invalid(&mir, "E_MIR_CFG_BUDGET");
+}
+
+#[test]
+fn cumulative_edge_budget_is_checked_before_lowering() {
+    let mut mir = good();
+    mir.blocks[0].successors = vec![0; 8192];
+    let mut second = mir.blocks[0].clone();
+    second.id = 1;
+    second.successors.push(0);
+    mir.blocks.push(second);
+    reject_invalid(&mir, "E_MIR_CFG_BUDGET");
+}
+
+#[test]
+fn oversized_block_operation_vector_is_rejected_before_lowering() {
+    let mut mir = good();
+    mir.blocks[0].instructions = vec![instruction(1, Effect::Control, Op::Return); 1025];
+    reject_invalid(&mir, "E_MIR_CFG_BUDGET");
+}
