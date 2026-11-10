@@ -3,8 +3,9 @@
 //! This module checks a typed ownership-event CFG. It does not parse AttoLang,
 //! infer traits from syntax, verify FFI witnesses, or authorize a backend's codegen.
 //! The frontend MUST derive owner identities and Copy/Send witnesses independently.
-//! Loops, pin-across-suspension, exceptional exits and divergent cleanup joins are
-//! conservatively rejected until a versioned full CFG model proves them.
+//! This V0 API rejects loops, pin-across-suspension, exceptional exits and
+//! divergent cleanup joins. `cyclic_v1` is a separate projection/loop model;
+//! it does not silently broaden this API's cleanup or MIR proof contract.
 use std::collections::{BTreeMap, BTreeSet};
 
 pub type OwnerId = u32;
@@ -574,3 +575,6 @@ fn verify_internal(
 
 /// Versioned typed-MIR producer envelope for differential compiler adapters.
 pub mod mir_v1;
+
+/// Explicit field-projection/loop model; not an implicit V0 or MIR upgrade.
+pub mod cyclic_v1;
