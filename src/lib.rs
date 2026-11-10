@@ -16,6 +16,8 @@ const MAX_LOANS: usize = 1024;
 const MAX_BLOCKS: usize = 4096;
 const MAX_EDGES: usize = 16384;
 const MAX_OPERATIONS_PER_BLOCK: usize = 1024;
+// An opt-in verifier trace must be bounded independently of the CFG budgets.
+const MAX_SHADOW_EVENTS_V0: usize = 65_536;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Traits {
@@ -114,6 +116,34 @@ impl Diagnostic {
 /// Exit owners appear in deterministic reverse acquisition order.
 /// This is a *proposed* plan; the compiler must independently prove all
 /// destruction, unwinding and runtime callback paths before emitting code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShadowEventV0 {
+    pub block: BlockId,
+    pub operation: usize,
+    pub kind: &'static str,
+    pub owner: Option<OwnerId>,
+}
+
+fn shadow_kind(op: &Op) -> (&'static str, Option<OwnerId>) {
+    match *op {
+        Op::Init { owner, .. } => ("INIT", Some(owner)),
+        Op::Read { owner } => ("READ", Some(owner)),
+        Op::Write { owner } => ("WRITE", Some(owner)),
+        Op::Borrow { owner, kind: BorrowKind::Shared, .. } => ("BORROW_SHARED", Some(owner)),
+        Op::Borrow { owner, kind: BorrowKind::Mutable, .. } => ("BORROW_MUT", Some(owner)),
+        Op::WriteThrough { owner, .. } => ("WRITE_VIA_MUT", Some(owner)),
+        Op::EndBorrow { .. } => ("END_BORROW", None),
+        Op::Move { from, .. } => ("MOVE", Some(from)),
+        Op::Copy { from, .. } => ("COPY", Some(from)),
+        Op::Drop { owner } => ("DROP", Some(owner)),
+        Op::TaskCaptureCopy { owner } => ("TASK_COPY", Some(owner)),
+        Op::TaskCaptureMove { owner } => ("TASK_MOVE", Some(owner)),
+        Op::Suspend => ("SUSPEND_SAFE", None),
+        Op::ActorHopBorrow { owner } => ("ACTOR_HOP_BORROW", Some(owner)),
+        Op::Return => ("RETURN", None),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Proof {
     pub cleanup_by_exit: BTreeMap<BlockId, Vec<OwnerId>>,
@@ -328,6 +358,27 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
 /// An independently validated, immutable typed compiler IR is required before
 /// invoking this API. Unproven syntax or effects must fail closed in the frontend.
 pub fn verify(program: &Program) -> Result<Proof, Diagnostic> {
+    verify_internal(program, None)
+}
+
+/// An opt-in observation hook integrated into the canonical verification loop.
+/// Observations are buffered during the same CFG traversal and emitted only
+/// after the complete function has passed verification. This prevents a later
+/// rejected block from leaking earlier tentative events. The buffer has an
+/// explicit cap, and overflow fails closed in shadow mode only. If a consumer
+/// returns an error, no Proof is returned; consumer side effects cannot be
+/// rolled back. This is not independent source/AST provenance proof.
+pub fn verify_with_shadow_v0(
+    program: &Program,
+    sink: &mut dyn FnMut(ShadowEventV0) -> Result<(), Diagnostic>,
+) -> Result<Proof, Diagnostic> {
+    verify_internal(program, Some(sink))
+}
+
+fn verify_internal(
+    program: &Program,
+    mut sink: Option<&mut dyn FnMut(ShadowEventV0) -> Result<(), Diagnostic>>,
+) -> Result<Proof, Diagnostic> {
     let structural = |code| Diagnostic::at(code, program.entry, 0);
     if program.blocks.is_empty() || program.blocks.len() > MAX_BLOCKS {
         return Err(structural("E_CFG_BUDGET"));
@@ -401,12 +452,16 @@ pub fn verify(program: &Program) -> Result<Proof, Diagnostic> {
             }
             *indegrees.get_mut(&next).expect("validated successor") += 1;
         }
-        let returns = block
+        let mut return_positions = block
             .operations
             .iter()
-            .position(|op| matches!(op, Op::Return));
+            .enumerate()
+            .filter_map(|(index, op)| matches!(op, Op::Return).then_some(index));
+        let returns = return_positions.next();
         if block.successors.is_empty() {
-            if returns != Some(block.operations.len().saturating_sub(1)) {
+            if returns != Some(block.operations.len().saturating_sub(1))
+                || return_positions.next().is_some()
+            {
                 return Err(Diagnostic::at(
                     "E_IMPLICIT_EXIT",
                     block.id,
@@ -442,6 +497,8 @@ pub fn verify(program: &Program) -> Result<Proof, Diagnostic> {
     }
     let mut incoming = BTreeMap::<BlockId, Vec<State>>::new();
     incoming.insert(program.entry, vec![State::default()]);
+    // None on the ordinary fast path: no trace allocation or second traversal.
+    let mut staged_events = sink.as_ref().map(|_| Vec::<ShadowEventV0>::new());
     let mut cleanup_by_exit = BTreeMap::new();
     for id in ordering {
         let paths = incoming
@@ -455,6 +512,13 @@ pub fn verify(program: &Program) -> Result<Proof, Diagnostic> {
         let block = blocks[&id];
         for (index, op) in block.operations.iter().enumerate() {
             apply(&mut state, op, id, index)?;
+            if let Some(events) = staged_events.as_mut() {
+                if events.len() >= MAX_SHADOW_EVENTS_V0 {
+                    return Err(Diagnostic::at("E_SHADOW_EVENT_BUDGET", id, index));
+                }
+                let (kind, owner) = shadow_kind(op);
+                events.push(ShadowEventV0 { block: id, operation: index, kind, owner });
+            }
         }
         if block.successors.is_empty() {
             let mut live: Vec<_> = state
@@ -469,7 +533,16 @@ pub fn verify(program: &Program) -> Result<Proof, Diagnostic> {
             incoming.entry(next).or_default().push(state.clone());
         }
     }
-    Ok(Proof { cleanup_by_exit })
+    let proof = Proof { cleanup_by_exit };
+    // Publish only a complete, successfully checked function's event stream.
+    // A failing consumer prevents returning Proof; observer side effects are
+    // not a substitute for the independently verified proof object.
+    if let Some(observer) = sink.as_deref_mut() {
+        if let Some(events) = staged_events {
+            for event in events { observer(event)?; }
+        }
+    }
+    Ok(proof)
 }
 
 /// Versioned typed-MIR producer envelope for differential compiler adapters.
