@@ -174,3 +174,55 @@ fn duplicate_successor_is_rejected() {
 fn semantic_failures_are_not_a_generic_unsupported_syntax_gate() {
     assert_eq!(code(vec![own(1), Op::Copy { from: 1, into: 2 }, ret()]), "E_COPY_PROOF_REQUIRED");
 }
+
+#[test]
+fn owner_id_reused_in_different_branches_is_rejected() {
+    // Two independent Init instructions with the same ID yield equal path
+    // states. A path-local uniqueness test would accidentally accept the join.
+    let p = Program { entry: 0, blocks: vec![
+        Block { id: 0, operations: vec![], successors: vec![1, 2] },
+        Block { id: 1, operations: vec![own(1)], successors: vec![3] },
+        Block { id: 2, operations: vec![own(1)], successors: vec![3] },
+        Block { id: 3, operations: vec![ret()], successors: vec![] },
+    ] };
+    assert_eq!(verify(&p).unwrap_err().code, "E_OWNER_DEF_REUSED");
+}
+
+#[test]
+fn move_target_reused_in_different_branches_is_rejected() {
+    let p = Program { entry: 0, blocks: vec![
+        Block { id: 0, operations: vec![own(1)], successors: vec![1, 2] },
+        Block { id: 1, operations: vec![Op::Move { from: 1, into: 2 }], successors: vec![3] },
+        Block { id: 2, operations: vec![Op::Move { from: 1, into: 2 }], successors: vec![3] },
+        Block { id: 3, operations: vec![ret()], successors: vec![] },
+    ] };
+    assert_eq!(verify(&p).unwrap_err().code, "E_OWNER_DEF_REUSED");
+}
+
+#[test]
+fn loan_id_reused_in_different_branches_is_rejected() {
+    let p = Program { entry: 0, blocks: vec![
+        Block { id: 0, operations: vec![own(1)], successors: vec![1, 2] },
+        Block { id: 1, operations: vec![
+            borrow(1, 10, BorrowKind::Shared), release(10)
+        ], successors: vec![3] },
+        Block { id: 2, operations: vec![
+            borrow(1, 10, BorrowKind::Shared), release(10)
+        ], successors: vec![3] },
+        Block { id: 3, operations: vec![ret()], successors: vec![] },
+    ] };
+    assert_eq!(verify(&p).unwrap_err().code, "E_LOAN_DEF_REUSED");
+}
+
+#[test]
+fn zero_owner_identity_is_rejected() {
+    assert_eq!(code(vec![own(0), ret()]), "E_OWNER_ID_ZERO");
+    assert_eq!(code(vec![own(1), Op::Move { from: 1, into: 0 }, ret()]),
+        "E_OWNER_ID_ZERO");
+}
+
+#[test]
+fn zero_loan_identity_is_rejected() {
+    assert_eq!(code(vec![own(1), borrow(1, 0, BorrowKind::Shared),
+        release(0), ret()]), "E_LOAN_ID_ZERO");
+}
