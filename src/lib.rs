@@ -12,6 +12,7 @@ pub type LoanId = u32;
 pub type BlockId = u32;
 
 const MAX_OWNERS: usize = 64;
+const MAX_LOANS: usize = 1024;
 const MAX_BLOCKS: usize = 4096;
 const MAX_EDGES: usize = 16384;
 const MAX_OPERATIONS_PER_BLOCK: usize = 1024;
@@ -149,6 +150,7 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
         Op::Borrow { owner, loan, kind } => {
             if !is_live(state, owner) { return Err(bad("E_USE_AFTER_MOVE_OR_DROP")); }
             if state.ever_loaned.contains(&loan) { return Err(bad("E_LOAN_ID_REUSED")); }
+            if state.ever_loaned.len() >= MAX_LOANS { return Err(bad("E_LOAN_BUDGET")); }
             if has_mut_loan(state, owner) || (kind == BorrowKind::Mutable && has_any_loan(state, owner)) {
                 return Err(bad("E_BORROW_CONFLICT"));
             }
