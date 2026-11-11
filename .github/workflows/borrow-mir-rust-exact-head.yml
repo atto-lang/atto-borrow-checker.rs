@@ -1,0 +1,66 @@
+name: Canonical Rust borrow MIR exact-head native gate
+on:
+  pull_request:
+    paths:
+      - "tests/nine_toolchain_contract_v1.rs"
+      - "src/lib.rs"
+      - "src/mir_v1.rs"
+      - "src/cyclic_v1.rs"
+      - ".github/workflows/borrow-mir-rust-exact-head.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  canonical-native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact PR head with no persisted token
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Verify PR head and real contract-test blob before execution
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"
+          mkdir -p target/borrow-rust-exact-head-evidence
+          printf "head=%s\ntree=%s\nstatus=HOST_NATIVE_ONLY\n" "$EXPECTED_HEAD" "$(git rev-parse HEAD^{tree})" > target/borrow-rust-exact-head-evidence/identity.txt
+          test "$(git rev-parse HEAD:tests/nine_toolchain_contract_v1.rs)" = "228ad7c5e7f107d03ce9c95d3cf8f9658f86cd96"
+          test "$(git rev-parse HEAD:tests/nine_toolchain_contract_v1.rs)" = "$(git hash-object --no-filters tests/nine_toolchain_contract_v1.rs)"
+          printf "test_blob=%s\n" "$(git rev-parse HEAD:tests/nine_toolchain_contract_v1.rs)" >> target/borrow-rust-exact-head-evidence/identity.txt
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
+        with:
+          toolchain: "1.99.1"
+          components: clippy,rustfmt
+      - name: Verify toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustc --version | tee target/borrow-rust-exact-head-evidence/toolchain.txt
+          cargo --version | tee -a target/borrow-rust-exact-head-evidence/toolchain.txt
+      - name: Format, lint and execute real canonical Rust tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check 2>&1 | tee target/borrow-rust-exact-head-evidence/fmt.log
+          cargo clippy --all-targets --locked -- -D warnings 2>&1 | tee target/borrow-rust-exact-head-evidence/clippy.log
+          cargo test --test nine_toolchain_contract_v1 --locked 2>&1 | tee target/borrow-rust-exact-head-evidence/contract.log
+          cargo test --all-targets --locked 2>&1 | tee target/borrow-rust-exact-head-evidence/debug.log
+          cargo test --all-targets --locked --release 2>&1 | tee target/borrow-rust-exact-head-evidence/release.log
+          printf "NOT_A_COMPILER_EMISSION_OR_GUEST_CERTIFICATION\n" >> target/borrow-rust-exact-head-evidence/identity.txt
+      - name: Preserve non-source exact-head evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: canonical-rust-HOST-ONLY-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/borrow-rust-exact-head-evidence/
+          if-no-files-found: warn
+          retention-days: 7
