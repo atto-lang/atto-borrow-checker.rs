@@ -24,10 +24,29 @@ capabilities are both mandatory.
 
 | Operation | Required static proof | Sender state after success |
 | --- | --- | --- |
+| `ActorSendPrepare { owner, ticket }` | Live owner, transitive Send, no live borrows, fresh ticket | Exclusively reserved; no sender access while pending |
+| `ActorSendCommit { ticket }` | Ticket prepared on this execution path | Consumed into one admitted recipient |
+| `ActorSendAbort { ticket }` | Ticket prepared on this execution path | Original owner restored unchanged |
 | `ActorSendMove { owner }` | Live owner, transitive Send, no live borrows | Consumed; recipient receives one owner |
 | `ActorSendCopy { owner }` | Live owner, Copy **and** Send, no exclusive loan | Retained; recipient receives an independent value |
 | `PublishFrozen { owner, region, sync_proven }` | Live owner, Send, compiler-derived deep immutable Sync proof, no live borrows | Consumed into one runtime-owned frozen region |
 | `PromoteGuarded { owner, region }` | Live owner, Send, no live borrows | Consumed into one runtime-owned synchronized region |
+
+A numeric send ticket is also a compiler-local, globally fresh identity; zero
+tickets and duplicate definitions across diverging CFG arms are rejected.
+Commit and abort are mutually exclusive *runtime outcomes*, represented by
+distinct control-flow paths. Returning while any ticket remains unresolved
+fails verification; a prepared payload cannot be read, written, borrowed,
+copied, dropped, transferred again or promoted before settlement. The
+`Suspend` operation may occur while a ticket is pending because backpressure
+must not park a reusable carrier; suspension does not return owner authority.
+The verifier does **not** implement mailbox reservation or guarantee atomic
+runtime commit. Runtime must authenticate the matching receiver/queue slot,
+exact source generation, cancellation and dequeue receipt, and must guarantee
+exactly-once settlement. A stale completion must neither consume the sender
+owner twice nor produce a second receiver. For a failed admission, the
+compiler's abort successor must restore the sender's ownership *only after*
+runtime rollback has completed.
 
 A numeric region ID here is only a globally fresh compiler IR identity; it is
 never a runtime capability or proof that the memory was allocated in a
@@ -47,9 +66,13 @@ provenance, trust, generation, permissions and physical loans.
 
 ## Runtime obligations not discharged by this patch
 
-- **Transactional mailbox admission:** failed send must leave the sender
-  owner usable, with no recipient owner. A successful move invalidates all
-  sender aliases and permits exactly one recipient owner.
+- **Transactional mailbox admission:** `Prepare` must reserve one runtime
+  queue/ownership ticket; `Commit` and `Abort` must be mutually exclusive,
+  generation-authenticated and linearizable with cancellation/STOP. Failed
+  send must leave the sender owner usable, with no recipient owner. A
+  successful move invalidates all sender aliases and permits exactly one
+  recipient owner. Reject duplicate settlement, stale notification, and
+  unbounded pending reservations.
 - **Immutable sharing:** freeze deeply or move into already immutable native
   storage. Publish with safe ordering, issue generation-fenced read leases,
   retain physical backing while readers/callbacks exist, deny all mutable
@@ -71,7 +94,11 @@ provenance, trust, generation, permissions and physical loans.
 
 1. Java `OwnershipChecker` / typed MIR builder must emit the exact closed
    operations *inside its existing ownership pass*, preserving complete
-   source/instruction census and denying unknown effects.
+   source/instruction census and denying unknown effects. Specifically, an
+   actor-mail send must lower to a `Prepare` and distinct `Commit`/`Abort`
+   successors only after the runtime's physical admission state is known.
+   Compiler-side static owner restoration cannot be treated as a rollback
+   receipt; verify stale actor/tenant epochs and queue cancellation races.
 2. Equivalent compiler-specific rules and negative diagnostics must execute
    before LLVM IR, CIL, Wasm or Forge code generation.
 3. Run the same canonical `.atto` positive and negative programs across
