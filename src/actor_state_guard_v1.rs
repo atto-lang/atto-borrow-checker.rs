@@ -177,7 +177,10 @@ impl GuardQueue {
         if actor == 0 || permit.record.actor != actor {
             return Err(GuardError::WrongHolder);
         }
-        let live = *self.active.get(&permit.ticket).ok_or(GuardError::UnknownTicket)?;
+        let live = *self
+            .active
+            .get(&permit.ticket)
+            .ok_or(GuardError::UnknownTicket)?;
         if live.actor != permit.record.actor
             || live.generation != permit.record.generation
             || live.mode != permit.record.mode

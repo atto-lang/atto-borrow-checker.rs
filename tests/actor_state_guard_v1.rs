@@ -10,7 +10,10 @@ fn contiguous_readers_share_and_late_writer_is_exclusive() {
     assert_eq!(q.active_count(), 2);
     for (actor, guard) in [(1, &readers[0]), (2, &readers[1])] {
         assert_eq!(q.access(guard, actor, false), Ok(()));
-        assert_eq!(q.access(guard, actor, true), Err(GuardError::WriteRequiresExclusive));
+        assert_eq!(
+            q.access(guard, actor, true),
+            Err(GuardError::WriteRequiresExclusive)
+        );
     }
     q.request(3, 7, Mode::Write).unwrap();
     q.request(4, 7, Mode::Read).unwrap();
@@ -54,7 +57,10 @@ fn cancellation_never_cancels_a_live_writer() {
     let second = q.request(9, 4, Mode::Read).unwrap();
     let active = q.admit_ready();
     assert_eq!(active[0].ticket(), first);
-    assert_eq!(q.cancel_pending(first, 8, 4), Err(GuardError::UnknownTicket));
+    assert_eq!(
+        q.cancel_pending(first, 8, 4),
+        Err(GuardError::UnknownTicket)
+    );
     assert_eq!(q.cancel_pending(second, 8, 4), Err(GuardError::WrongHolder));
     q.cancel_pending(second, 9, 4).unwrap();
     assert_eq!(q.waiting_count(), 0);
@@ -74,7 +80,10 @@ fn wrong_holder_double_release_and_reentrancy_fail_closed() {
     assert_eq!(q.release(&grant[0], 2), Err(GuardError::WrongHolder));
     q.release(&grant[0], 1).unwrap();
     assert_eq!(q.release(&grant[0], 1), Err(GuardError::UnknownTicket));
-    assert_eq!(q.access(&grant[0], 1, false), Err(GuardError::UnknownTicket));
+    assert_eq!(
+        q.access(&grant[0], 1, false),
+        Err(GuardError::UnknownTicket)
+    );
 }
 
 #[test]
@@ -88,16 +97,28 @@ fn hot_upgrade_fences_all_access_but_retains_physical_live_guards() {
     q.retire(13).unwrap();
     assert_eq!(q.waiting_count(), 0);
     assert_eq!(q.active_count(), 2);
-    assert_eq!(q.access(&permits[0], 3, false), Err(GuardError::StaleGeneration));
-    assert_eq!(q.release(&permits[0], 3), Err(GuardError::PhysicalQuiescenceRequired));
-    assert_eq!(q.request(6, 12, Mode::Read), Err(GuardError::StaleGeneration));
+    assert_eq!(
+        q.access(&permits[0], 3, false),
+        Err(GuardError::StaleGeneration)
+    );
+    assert_eq!(
+        q.release(&permits[0], 3),
+        Err(GuardError::PhysicalQuiescenceRequired)
+    );
+    assert_eq!(
+        q.request(6, 12, Mode::Read),
+        Err(GuardError::StaleGeneration)
+    );
     assert_eq!(q.request(6, 13, Mode::Read), Err(GuardError::Retired));
     assert!(!q.may_reclaim());
     q.complete_physical_quiescence(&permits[0], 3).unwrap();
     assert!(!q.may_reclaim());
     q.complete_physical_quiescence(&permits[1], 4).unwrap();
     assert!(q.may_reclaim());
-    assert_eq!(q.complete_physical_quiescence(&permits[1], 4), Err(GuardError::UnknownTicket));
+    assert_eq!(
+        q.complete_physical_quiescence(&permits[1], 4),
+        Err(GuardError::UnknownTicket)
+    );
 }
 
 #[test]
@@ -107,7 +128,10 @@ fn invalid_epoch_cannot_claim_reclamation_or_flush_live_access() {
     let p = q.admit_ready();
     assert_eq!(q.retire(9), Err(GuardError::StaleGeneration));
     assert_eq!(q.retire(8), Err(GuardError::StaleGeneration));
-    assert_eq!(q.complete_physical_quiescence(&p[0], 1), Err(GuardError::NotRetired));
+    assert_eq!(
+        q.complete_physical_quiescence(&p[0], 1),
+        Err(GuardError::NotRetired)
+    );
     assert_eq!(q.access(&p[0], 1, true), Ok(()));
 }
 
@@ -129,9 +153,18 @@ fn outstanding_budget_rejects_more_than_one_thousand_and_twenty_four() {
 fn invalid_id_and_epoch_never_grant_permission() {
     assert_eq!(GuardQueue::new(0).unwrap_err(), GuardError::InvalidIdentity);
     let mut q = GuardQueue::new(2).unwrap();
-    assert_eq!(q.request(0, 2, Mode::Read), Err(GuardError::InvalidIdentity));
-    assert_eq!(q.request(1, 0, Mode::Read), Err(GuardError::InvalidIdentity));
-    assert_eq!(q.request(1, 1, Mode::Read), Err(GuardError::StaleGeneration));
+    assert_eq!(
+        q.request(0, 2, Mode::Read),
+        Err(GuardError::InvalidIdentity)
+    );
+    assert_eq!(
+        q.request(1, 0, Mode::Read),
+        Err(GuardError::InvalidIdentity)
+    );
+    assert_eq!(
+        q.request(1, 1, Mode::Read),
+        Err(GuardError::StaleGeneration)
+    );
     assert_eq!(q.active_count(), 0);
     assert_eq!(q.waiting_count(), 0);
 }

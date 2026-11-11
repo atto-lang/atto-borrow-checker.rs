@@ -428,7 +428,9 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
             return Err(bad("E_ACTOR_BORROW_ESCAPE"));
         }
         Op::ActorSendPrepare { owner, ticket } => {
-            let source = state.live.get(&owner)
+            let source = state
+                .live
+                .get(&owner)
                 .ok_or_else(|| bad("E_USE_AFTER_MOVE_OR_DROP"))?;
             if !source.traits.is_send {
                 return Err(bad("E_ACTOR_SEND_PROOF_REQUIRED"));
@@ -441,7 +443,9 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
             }
         }
         Op::ActorSendCommit { ticket } => {
-            let owner = state.pending_sends.remove(&ticket)
+            let owner = state
+                .pending_sends
+                .remove(&ticket)
                 .ok_or_else(|| bad("E_UNKNOWN_ACTOR_SEND_TICKET"))?;
             // Runtime commit must atomically pair this IR effect with one
             // recipient owner; a model proof alone cannot perform admission.
@@ -450,7 +454,9 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
             }
         }
         Op::ActorSendAbort { ticket } => {
-            state.pending_sends.remove(&ticket)
+            state
+                .pending_sends
+                .remove(&ticket)
                 .ok_or_else(|| bad("E_UNKNOWN_ACTOR_SEND_TICKET"))?;
             // The untouched sender owner is usable again only on this path.
         }
@@ -483,9 +489,7 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
             }
         }
         Op::PublishFrozen {
-            owner,
-            sync_proven,
-            ..
+            owner, sync_proven, ..
         } => {
             let source = state
                 .live
