@@ -1,0 +1,264 @@
+//! Native Rust execution of the 22 logical ownership cases shared by the
+//! nine-toolchain source-free conformance contract. This is intentionally a
+//! direct call into the canonical verifier, not another JavaScript model.
+//! These fixtures do not authenticate a compiler's source-to-MIR lowering.
+
+use atto_borrow_checker::mir_v1::{
+    verify_mir, Effect, Instruction, MirBlock, MirError, MirFunction, Producer, CONTRACT_VERSION,
+};
+use atto_borrow_checker::{verify, Block, BorrowKind, Op, Program, Traits};
+
+fn init(owner: u32, copy: bool, send: bool) -> Op {
+    Op::Init {
+        owner,
+        traits: Traits {
+            is_copy: copy,
+            is_send: send,
+        },
+    }
+}
+
+fn borrow(owner: u32, loan: u32, kind: BorrowKind) -> Op {
+    Op::Borrow { owner, loan, kind }
+}
+
+fn block(id: u32, operations: Vec<Op>, successors: Vec<u32>) -> Block {
+    Block {
+        id,
+        operations,
+        successors,
+    }
+}
+
+fn linear(operations: Vec<Op>) -> Program {
+    Program {
+        entry: 0,
+        blocks: vec![block(0, operations, vec![])],
+    }
+}
+
+fn branching(blocks: Vec<Block>) -> Program {
+    Program { entry: 0, blocks }
+}
+
+struct Case {
+    id: &'static str,
+    program: Program,
+    diagnostic: Option<&'static str>,
+}
+
+fn case(id: &'static str, operations: Vec<Op>, diagnostic: Option<&'static str>) -> Case {
+    Case {
+        id,
+        program: linear(operations),
+        diagnostic,
+    }
+}
+
+fn all_native_cases() -> Vec<Case> {
+    use BorrowKind::{Mutable, Shared};
+    vec![
+        case("C01", vec![init(1, true, false), Op::Read { owner: 1 }, Op::Return], None),
+        case("C02", vec![
+            init(1, false, false),
+            Op::Move { from: 1, into: 2 },
+            Op::Read { owner: 2 },
+            Op::Return,
+        ], None),
+        case("C03", vec![
+            init(1, false, false),
+            Op::Move { from: 1, into: 2 },
+            Op::Read { owner: 1 },
+            Op::Return,
+        ], Some("E_USE_AFTER_MOVE_OR_DROP")),
+        case("C04", vec![
+            init(1, false, false),
+            Op::Copy { from: 1, into: 2 },
+            Op::Return,
+        ], Some("E_COPY_PROOF_REQUIRED")),
+        case("C05", vec![
+            init(1, false, false),
+            borrow(1, 10, Shared),
+            borrow(1, 11, Shared),
+            Op::Read { owner: 1 },
+            Op::EndBorrow { loan: 11 },
+            Op::EndBorrow { loan: 10 },
+            Op::Return,
+        ], None),
+        case("C06", vec![
+            init(1, false, false),
+            borrow(1, 10, Shared),
+            borrow(1, 11, Mutable),
+            Op::Return,
+        ], Some("E_BORROW_CONFLICT")),
+        case("C07", vec![
+            init(1, false, false),
+            borrow(1, 10, Mutable),
+            Op::WriteThrough { owner: 1, loan: 10 },
+            Op::EndBorrow { loan: 10 },
+            Op::Return,
+        ], None),
+        case("C08", vec![
+            init(1, false, false),
+            borrow(1, 10, Shared),
+            Op::Write { owner: 1 },
+            Op::Return,
+        ], Some("E_BORROW_CONFLICT")),
+        case("C09", vec![
+            init(1, false, false),
+            borrow(1, 10, Shared),
+            Op::Drop { owner: 1 },
+            Op::Return,
+        ], Some("E_BORROW_CONFLICT")),
+        case("C10", vec![
+            init(1, false, false),
+            borrow(1, 10, Shared),
+            Op::Suspend,
+            Op::Return,
+        ], Some("E_SUSPEND_WITH_LIVE_LOAN")),
+        case("C11", vec![
+            init(1, false, false),
+            borrow(1, 10, Shared),
+            Op::EndBorrow { loan: 10 },
+            Op::Suspend,
+            Op::Return,
+        ], None),
+        case("C12", vec![
+            init(1, false, false),
+            Op::ActorHopBorrow { owner: 1 },
+            Op::Return,
+        ], Some("E_ACTOR_BORROW_ESCAPE")),
+        case("C13", vec![
+            init(1, true, false),
+            Op::TaskCaptureCopy { owner: 1 },
+            Op::Return,
+        ], Some("E_TASK_CAPTURE_PROOF")),
+        case("C14", vec![
+            init(1, false, true),
+            Op::TaskCaptureMove { owner: 1 },
+            Op::Return,
+        ], None),
+        case("C15", vec![
+            init(1, false, false),
+            Op::EndBorrow { loan: 10 },
+            Op::Return,
+        ], Some("E_UNKNOWN_LOAN")),
+        Case {
+            id: "C16",
+            program: branching(vec![
+                block(0, vec![], vec![1, 2]),
+                block(1, vec![init(1, false, false)], vec![3]),
+                block(2, vec![init(1, false, false)], vec![3]),
+                block(3, vec![Op::Return], vec![]),
+            ]),
+            diagnostic: Some("E_OWNER_DEF_REUSED"),
+        },
+        Case {
+            id: "C17",
+            program: branching(vec![
+                block(0, vec![init(1, false, false)], vec![1, 2]),
+                block(1, vec![borrow(1, 10, Shared), Op::EndBorrow { loan: 10 }], vec![3]),
+                block(2, vec![borrow(1, 10, Shared), Op::EndBorrow { loan: 10 }], vec![3]),
+                block(3, vec![Op::Return], vec![]),
+            ]),
+            diagnostic: Some("E_LOAN_DEF_REUSED"),
+        },
+        Case {
+            id: "C18",
+            program: branching(vec![
+                block(0, vec![init(1, false, false)], vec![1, 2]),
+                block(1, vec![Op::Move { from: 1, into: 2 }], vec![3]),
+                block(2, vec![Op::Read { owner: 1 }], vec![3]),
+                block(3, vec![Op::Return], vec![]),
+            ]),
+            diagnostic: Some("E_CFG_JOIN_UNPROVEN"),
+        },
+        Case {
+            id: "C19",
+            program: branching(vec![
+                block(0, vec![init(1, false, false)], vec![1]),
+                block(1, vec![Op::Read { owner: 1 }], vec![1]),
+            ]),
+            diagnostic: Some("E_CFG_CYCLE_UNPROVEN"),
+        },
+        case("C21", vec![
+            init(1, false, false),
+            Op::Read { owner: 1 },
+        ], Some("E_IMPLICIT_EXIT")),
+        case("C22", vec![
+            init(1, false, false),
+            borrow(1, 10, Shared),
+            Op::Return,
+        ], Some("E_LOAN_ESCAPE")),
+    ]
+}
+
+#[test]
+fn canonical_rust_v0_agrees_on_all_21_representable_cases() {
+    let cases = all_native_cases();
+    assert_eq!(cases.len(), 21);
+    let mut ids = std::collections::BTreeSet::new();
+    for fixture in cases {
+        assert!(ids.insert(fixture.id), "repeated case {}", fixture.id);
+        match (verify(&fixture.program), fixture.diagnostic) {
+            (Ok(_), None) => {}
+            (Err(actual), Some(expected)) => {
+                assert_eq!(actual.code, expected, "case {}", fixture.id);
+            }
+            (result, expected) => {
+                panic!("case {} outcome {:?}, expected {:?}", fixture.id, result, expected);
+            }
+        }
+    }
+    assert!(!ids.contains("C20"), "unknown-effect case belongs to MIR validation");
+}
+
+#[test]
+fn c20_unknown_foreign_effect_is_rejected_by_real_mir_envelope() {
+    let function = MirFunction {
+        version: CONTRACT_VERSION.into(),
+        producer: Producer {
+            compiler_git_sha: "a".repeat(40),
+            source_sha256: "b".repeat(64),
+            source_unit_id: 1,
+            function_id: 1,
+        },
+        entry: 0,
+        expected_instruction_ids: vec![1, 2, 3],
+        blocks: vec![MirBlock {
+            id: 0,
+            instructions: vec![
+                Instruction {
+                    instruction_id: 1,
+                    source_node_id: 11,
+                    effect: Effect::Ownership,
+                    operation: init(1, false, false),
+                },
+                // A frontend MUST label unmodeled FFI/unwind/cancel effects
+                // Unsupported; it must never translate them into Nop.
+                Instruction {
+                    instruction_id: 2,
+                    source_node_id: 12,
+                    effect: Effect::Unsupported,
+                    operation: Op::Read { owner: 1 },
+                },
+                Instruction {
+                    instruction_id: 3,
+                    source_node_id: 13,
+                    effect: Effect::Control,
+                    operation: Op::Return,
+                },
+            ],
+            successors: vec![],
+        }],
+    };
+    assert_eq!(verify_mir(&function), Err(MirError::Invalid("E_MIR_UNSUPPORTED_EFFECT")));
+}
+
+#[test]
+fn zero_evidence_cannot_be_called_a_compiler_emission_proof() {
+    // This test asserts API scope rather than guest certification. An
+    // internal model verdict is not evidence of true source/LLVM/CIL/CLIF
+    // emission inventories, even when all native cases accept.
+    assert_eq!(atto_borrow_checker::mir_v1::CONTRACT_VERSION, "atto-borrow-mir-v1");
+}
