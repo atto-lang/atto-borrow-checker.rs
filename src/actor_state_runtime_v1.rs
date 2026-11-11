@@ -40,6 +40,9 @@ pub struct GuardedActorRegion<T> {
 struct QueuedPermits {
     guard: GuardQueue,
     releases: Receiver<Permit>,
+    // An unexpected completion error means host bookkeeping is corrupt.
+    // Never silently resume admissions after the bad message is consumed.
+    invalidated: bool,
 }
 
 impl QueuedPermits {
@@ -47,12 +50,19 @@ impl QueuedPermits {
     // Draining under a short-lived queue lock linearizes completion against
     // retirement and admissions; a failure fails closed.
     fn drain_completed(&mut self) -> Result<(), RuntimeError> {
+        if self.invalidated {
+            return Err(RuntimeError::Poisoned);
+        }
         while let Ok(permit) = self.releases.try_recv() {
-            if self.guard.is_retired() {
+            let result = if self.guard.is_retired() {
                 self.guard
-                    .complete_physical_quiescence(&permit, permit.actor())?;
+                    .complete_physical_quiescence(&permit, permit.actor())
             } else {
-                self.guard.release(&permit, permit.actor())?;
+                self.guard.release(&permit, permit.actor())
+            };
+            if result.is_err() {
+                self.invalidated = true;
+                return Err(RuntimeError::Poisoned);
             }
         }
         Ok(())
@@ -89,6 +99,7 @@ impl<T> GuardedActorRegion<T> {
             queue: Mutex::new(QueuedPermits {
                 guard: GuardQueue::new(generation)?,
                 releases: receive,
+                invalidated: false,
             }),
             releases: send,
             state: RwLock::new(initial),
@@ -245,6 +256,26 @@ mod deferred_release_tests {
         worker.join().unwrap();
         assert!(result.is_ok(), "scope Drop parked waiting for queue mutex");
         assert_eq!(region.active_count(), Ok(0));
+    }
+
+    #[test]
+    fn invalid_deferred_completion_quarantines_all_future_admissions() {
+        let region = GuardedActorRegion::new(7, 0_u64).unwrap();
+        region.request(1, 7, Mode::Read).unwrap();
+        let scope = region.admit_ready().unwrap().pop().unwrap();
+        // Deliberately simulate a buggy host bypassing scoped completion.
+        // The deferred close now references a nonexistent active ticket.
+        {
+            let mut queue = region.queue.lock().unwrap();
+            let permit = scope.permit.as_ref().unwrap();
+            queue.guard.release(permit, permit.actor()).unwrap();
+        }
+        drop(scope);
+        assert_eq!(region.active_count(), Err(RuntimeError::Poisoned));
+        assert_eq!(region.active_count(), Err(RuntimeError::Poisoned));
+        assert_eq!(region.request(2, 7, Mode::Read), Err(RuntimeError::Poisoned));
+        assert_eq!(region.retire(8), Err(RuntimeError::Poisoned));
+        assert_eq!(region.may_reclaim(), Err(RuntimeError::Poisoned));
     }
 
     #[test]
