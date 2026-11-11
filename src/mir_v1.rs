@@ -74,7 +74,11 @@ fn is_hex(value: &str, expected_len: usize) -> bool {
 fn expected_effect(op: &Op) -> Effect {
     match op {
         Op::Suspend => Effect::Suspension,
-        Op::ActorHopBorrow { .. } => Effect::ActorBoundary,
+        Op::ActorHopBorrow { .. }
+        | Op::ActorSendMove { .. }
+        | Op::ActorSendCopy { .. }
+        | Op::PublishFrozen { .. }
+        | Op::PromoteGuarded { .. } => Effect::ActorBoundary,
         Op::Return => Effect::Control,
         _ => Effect::Ownership,
     }
