@@ -66,3 +66,14 @@ The reference cannot prove that `T` lacks interior-shared `Arc` aliases
 or that callbacks cannot interact with FFI/raw pointers. Production code must
 use a layout-certified actor state type and enforce non-escaping borrows before
 exposing a state callback to guest code.
+
+## Fail-closed completion corruption
+
+The completion receiver treats any unexpected unknown, duplicate, or invalid
+logical permit settlement as a permanent queue quarantine. Every subsequent
+request, admission, STOP, and `may_reclaim` query returns
+`RuntimeError::Poisoned`. A consumed malformed completion must never turn
+a one-time error into a later false proof that the region is reclaimable.
+The unit regression intentionally simulates an out-of-band host settlement,
+then verifies persistent rejection. Do not clear quarantine without an
+independent supervisor reconciliation and physical quiescence proof.
