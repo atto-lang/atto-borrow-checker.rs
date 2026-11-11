@@ -30,6 +30,8 @@ cargo test --all-targets --locked --release
 
 No external Rust dependencies are required. The reconciled baseline has executed local Rust tests; see [integration evidence and remaining work](docs/INTEGRATION_BASELINE.md). These are library/model tests, **not guest compiler certification**. The crate does not parse .atto, verify type trait/layout provenance, prove pinned continuations, or integrate into production backend code generation. V0/MIR V1 still reject cyclic CFGs. Do not promote host-only assertions to guest compiler certification.
 
+V0 now also distinguishes actor-owned mailbox moves and Copy+Send snapshots from explicit immutable publication and runtime-owned guarded promotion. These are **static ownership handoff preflights**, not shared memory access grants or proof of actual per-actor heap placement. See [actor/shared ownership boundaries](docs/ACTOR_SHARED_OWNERSHIP_BOUNDARIES_V1.md) and [the dedicated negative tests](tests/actor_shared_boundaries_v1.rs).
+
 `mir_v1::verify_mir_with_shadow_v0` validates the full operation inventory and input budgets before canonical verification, and publishes observations only after the entire CFG succeeds. Native compiler adapters remain responsible for independently deriving the complete typed inventory.
 
 Related work: [AttoLang shared conformance](https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/pull/646) and [broader Rust static analysis](https://github.com/ores-truffle-oreslang/oreslang-static-analysis.rs).
