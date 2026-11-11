@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 use crate::{verify, verify_with_shadow_v0, Block, Diagnostic, Op, Program, Proof, ShadowEventV0};
 
 pub const CONTRACT_VERSION: &str = "atto-borrow-mir-v1";
-const MAX_MIR_OPERATIONS: usize = 100_000;
+const MAX_MIR_OPERATIONS: usize = crate::MAX_OPERATIONS;
 const MAX_MIR_BLOCKS: usize = 4096;
 
 /// Metadata needed for reproducibility, NOT cryptographic attestation.
