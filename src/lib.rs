@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub type OwnerId = u32;
 pub type LoanId = u32;
 pub type BlockId = u32;
+pub type SharedRegionId = u32;
 
 const MAX_OWNERS: usize = 64;
 const MAX_LOANS: usize = 1024;
@@ -81,6 +82,28 @@ pub enum Op {
     ActorHopBorrow {
         owner: OwnerId,
     },
+    /// Successful mailbox admission transfers this owned Send value.
+    /// The runtime must commit or atomically roll back a failed send.
+    ActorSendMove {
+        owner: OwnerId,
+    },
+    /// Copy + Send only: the sender retains its own independent value.
+    ActorSendCopy {
+        owner: OwnerId,
+    },
+    /// Consume the mutable owner before publishing a deeply frozen Sync value.
+    /// The compiler must independently prove transitive Sync and freezing.
+    PublishFrozen {
+        owner: OwnerId,
+        region: SharedRegionId,
+        sync_proven: bool,
+    },
+    /// Consume the unique owner into a runtime-controlled guarded region.
+    /// This never grants actors raw shared-memory write authority.
+    PromoteGuarded {
+        owner: OwnerId,
+        region: SharedRegionId,
+    },
     Return,
 }
 
@@ -149,6 +172,10 @@ fn shadow_kind(op: &Op) -> (&'static str, Option<OwnerId>) {
         Op::TaskCaptureMove { owner } => ("TASK_MOVE", Some(owner)),
         Op::Suspend => ("SUSPEND_SAFE", None),
         Op::ActorHopBorrow { owner } => ("ACTOR_HOP_BORROW", Some(owner)),
+        Op::ActorSendMove { owner } => ("ACTOR_SEND_MOVE", Some(owner)),
+        Op::ActorSendCopy { owner } => ("ACTOR_SEND_COPY", Some(owner)),
+        Op::PublishFrozen { owner, .. } => ("PUBLISH_FROZEN", Some(owner)),
+        Op::PromoteGuarded { owner, .. } => ("PROMOTE_GUARDED", Some(owner)),
         Op::Return => ("RETURN", None),
     }
 }
@@ -353,6 +380,53 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
             }
             return Err(bad("E_ACTOR_BORROW_ESCAPE"));
         }
+        Op::ActorSendMove { owner } | Op::PromoteGuarded { owner, .. } => {
+            let source = state
+                .live
+                .get(&owner)
+                .ok_or_else(|| bad("E_USE_AFTER_MOVE_OR_DROP"))?;
+            if !source.traits.is_send {
+                return Err(bad("E_ACTOR_SEND_PROOF_REQUIRED"));
+            }
+            if has_any_loan(state, owner) {
+                return Err(bad("E_BORROW_CONFLICT"));
+            }
+            // Exactly one semantic owner remains: the receiver/runtime.
+            // A source adapter must ensure this runs only after committed
+            // admission, with atomic rollback if an external send fails.
+            state.live.remove(&owner);
+        }
+        Op::ActorSendCopy { owner } => {
+            let source = state
+                .live
+                .get(&owner)
+                .ok_or_else(|| bad("E_USE_AFTER_MOVE_OR_DROP"))?;
+            if !source.traits.is_send || !source.traits.is_copy {
+                return Err(bad("E_ACTOR_COPY_SEND_PROOF_REQUIRED"));
+            }
+            if has_mut_loan(state, owner) {
+                return Err(bad("E_BORROW_CONFLICT"));
+            }
+        }
+        Op::PublishFrozen {
+            owner,
+            sync_proven,
+            ..
+        } => {
+            let source = state
+                .live
+                .get(&owner)
+                .ok_or_else(|| bad("E_USE_AFTER_MOVE_OR_DROP"))?;
+            if !source.traits.is_send || !sync_proven {
+                return Err(bad("E_SHARED_FROZEN_PROOF_REQUIRED"));
+            }
+            if has_any_loan(state, owner) {
+                return Err(bad("E_BORROW_CONFLICT"));
+            }
+            // Publication consumes the local owner. The runtime must create
+            // independently generation-fenced read-only shared capabilities.
+            state.live.remove(&owner);
+        }
         Op::Return => {
             if !state.loans.is_empty() {
                 return Err(bad("E_LOAN_ESCAPE"));
@@ -422,6 +496,7 @@ fn verify_internal(
     // merge mapping. This restricted V0 conservatively rejects any ID reuse.
     let mut owner_definitions = BTreeSet::new();
     let mut loan_definitions = BTreeSet::new();
+    let mut shared_region_definitions = BTreeSet::new();
     for block in blocks.values() {
         for (index, op) in block.operations.iter().enumerate() {
             let owner = match op {
@@ -449,6 +524,25 @@ fn verify_internal(
                 }
                 if loan_definitions.len() > MAX_LOANS {
                     return Err(Diagnostic::at("E_LOAN_BUDGET", block.id, index));
+                }
+            }
+            let region = match op {
+                Op::PublishFrozen { region, .. } | Op::PromoteGuarded { region, .. } => {
+                    Some(*region)
+                }
+                _ => None,
+            };
+            if let Some(region) = region {
+                // Region numbers are SSA provenance identities, never runtime
+                // authorization tokens. Reject reuse even on divergent paths.
+                if region == 0 {
+                    return Err(Diagnostic::at("E_REGION_ID_ZERO", block.id, index));
+                }
+                if !shared_region_definitions.insert(region) {
+                    return Err(Diagnostic::at("E_REGION_DEF_REUSED", block.id, index));
+                }
+                if shared_region_definitions.len() > MAX_OWNERS {
+                    return Err(Diagnostic::at("E_REGION_BUDGET", block.id, index));
                 }
             }
         }
