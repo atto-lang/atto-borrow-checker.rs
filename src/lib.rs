@@ -8,6 +8,8 @@
 //! it does not silently broaden this API's cleanup or MIR proof contract.
 use std::collections::{BTreeMap, BTreeSet};
 
+pub mod actor_state_guard_v1;
+
 pub type OwnerId = u32;
 pub type LoanId = u32;
 pub type BlockId = u32;
