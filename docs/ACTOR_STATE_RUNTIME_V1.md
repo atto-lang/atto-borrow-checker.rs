@@ -19,8 +19,14 @@ is held, and cannot return a borrowed reference from safe Rust.
   for the host to reschedule rather than park a reusable carrier.
 - A missing/foreign, stale, retired or read-to-write escalated scope fails
   before running the callback.
-- Scope \`Drop\` releases the logical permit *after* the RwLock guard is gone,
-  including panic unwinding. Poisoned state fails closed.
+- Scope guard Drop sends a completed permit to a host-only completion
+  channel **after** the RwLock guard is gone, including panic unwinding.
+  This never waits for the queue mutex. The next admission/status/STOP call
+  drains completed permits under the mutex and preserves reclamation fencing.
+  A poisoned queue fails closed.
+- The completion channel is unbounded by itself, but only 1,024 permits can
+  exist in the admission ledger. The host must service the queue; dropping
+  a scope does not automatically wake an actor. Poisoned state fails closed.
 - STOP/hot-upgrade can retire an active region; it rejects later access but
   cannot reclaim until all already-entered physical scopes finish. The
   \`may_reclaim\` flag is necessary but insufficient for freeing backing
@@ -46,3 +52,17 @@ writer ordering, failed escalation, cross-region scope rejection, STOP during
 an executing read, stale scope non-execution, cancellation, panic unwinding,
 and the five-mail Counter accumulation. These are **real Rust threads and
 memory locks**, not compiled AttoLang guests or backend parity evidence.
+
+## Concurrency audit (2026-11-11)
+
+An audit found the earlier scope Drop performed a potentially blocking queue
+mutex acquisition, contradicting nonblocking carrier semantics. The fixed
+implementation defers permit completion; unit tests intentionally hold the
+queue mutex while another thread drops a scope, including a retired region.
+This eliminates *queue-mutex blocking in Drop*, not the need for host polling,
+quota enforcement, actor authentication or a real tenant runtime adapter.
+
+The reference cannot prove that `T` lacks interior-shared `Arc` aliases
+or that callbacks cannot interact with FFI/raw pointers. Production code must
+use a layout-certified actor state type and enforce non-escaping borrows before
+exposing a state callback to guest code.

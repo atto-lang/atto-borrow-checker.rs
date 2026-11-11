@@ -113,7 +113,10 @@ impl<T> GuardedActorRegion<T> {
         generation: u64,
         mode: Mode,
     ) -> Result<u64, RuntimeError> {
-        Ok(self.queue()?.guard.request(trusted_actor, generation, mode)?)
+        Ok(self
+            .queue()?
+            .guard
+            .request(trusted_actor, generation, mode)?)
     }
 
     /// No carrier sleep. A later reader cannot pass a queued writer.
