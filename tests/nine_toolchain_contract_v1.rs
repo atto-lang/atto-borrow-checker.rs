@@ -327,3 +327,48 @@ fn zero_evidence_cannot_be_called_a_compiler_emission_proof() {
     // emission inventories, even when all native cases accept.
     assert_eq!(atto_borrow_checker::mir_v1::CONTRACT_VERSION, "atto-borrow-mir-v1");
 }
+
+#[test]
+fn cyclic_oracle_matches_llvm_fixed_point_loop_decisions() {
+    use atto_borrow_checker::cyclic_v1::{
+        check, Block as CyclicBlock, Code, Op as CyclicOp, Place, Program as CyclicProgram,
+        Root,
+    };
+
+    let root = Place::root(1);
+    let program = |body: CyclicOp| CyclicProgram {
+        roots: vec![Root {
+            id: 1,
+            is_copy: false,
+            is_transferable: false,
+        }],
+        blocks: vec![
+            CyclicBlock {
+                id: 0,
+                ops: vec![],
+                successors: vec![1],
+            },
+            CyclicBlock {
+                id: 1,
+                ops: vec![body],
+                successors: vec![1, 2],
+            },
+            CyclicBlock {
+                id: 2,
+                ops: vec![CyclicOp::Read(root.clone())],
+                successors: vec![],
+            },
+        ],
+        entry: 0,
+    };
+
+    // The LLVM CFG verifier already accepts this stable read-only cycle.
+    // Rust V0 rejects all cycles; cyclic_v1 is the proper future contract.
+    let legal_loop = program(CyclicOp::Read(root.clone()));
+    let proof = check(&legal_loop).expect("read-only cycle must reach a fixed point");
+    assert_eq!(proof.reachable_blocks, 3);
+
+    // Moving a value on the backedge makes a later read unsafe.
+    let unsafe_loop = program(CyclicOp::Move(root));
+    assert_eq!(check(&unsafe_loop).unwrap_err().code, Code::UseAfterMove);
+}
