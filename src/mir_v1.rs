@@ -75,6 +75,9 @@ fn expected_effect(op: &Op) -> Effect {
     match op {
         Op::Suspend => Effect::Suspension,
         Op::ActorHopBorrow { .. }
+        | Op::ActorSendPrepare { .. }
+        | Op::ActorSendCommit { .. }
+        | Op::ActorSendAbort { .. }
         | Op::ActorSendMove { .. }
         | Op::ActorSendCopy { .. }
         | Op::PublishFrozen { .. }
