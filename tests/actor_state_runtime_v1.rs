@@ -31,18 +31,23 @@ fn two_readers_are_physically_concurrent_and_writer_cannot_barge() {
     assert_eq!(scopes.len(), 2);
     let barrier = Arc::new(Barrier::new(3));
     let (entered_tx, entered_rx) = mpsc::channel();
-    let handles: Vec<_> = scopes.into_iter().map(|scope| {
-        let state = Arc::clone(&state);
-        let barrier = Arc::clone(&barrier);
-        let entered_tx = entered_tx.clone();
-        thread::spawn(move || {
-            state.execute_read(scope, |v| {
-                entered_tx.send(()).unwrap();
-                barrier.wait();
-                *v
-            }).unwrap()
+    let handles: Vec<_> = scopes
+        .into_iter()
+        .map(|scope| {
+            let state = Arc::clone(&state);
+            let barrier = Arc::clone(&barrier);
+            let entered_tx = entered_tx.clone();
+            thread::spawn(move || {
+                state
+                    .execute_read(scope, |v| {
+                        entered_tx.send(()).unwrap();
+                        barrier.wait();
+                        *v
+                    })
+                    .unwrap()
+            })
         })
-    }).collect();
+        .collect();
     entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
     entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
     state.request(3, 2, Mode::Write).unwrap();
@@ -55,13 +60,19 @@ fn two_readers_are_physically_concurrent_and_writer_cannot_barge() {
     }
     let writer = state.admit_ready().unwrap();
     assert_eq!(writer.len(), 1);
-    assert_eq!(state.execute_write(writer.into_iter().next().unwrap(), |v| {
-        *v += 1;
-        *v
-    }), Ok(43));
+    assert_eq!(
+        state.execute_write(writer.into_iter().next().unwrap(), |v| {
+            *v += 1;
+            *v
+        }),
+        Ok(43)
+    );
     let later_reader = state.admit_ready().unwrap();
     assert_eq!(later_reader.len(), 1);
-    assert_eq!(state.execute_read(later_reader.into_iter().next().unwrap(), |v| *v), Ok(43));
+    assert_eq!(
+        state.execute_read(later_reader.into_iter().next().unwrap(), |v| *v),
+        Ok(43)
+    );
 }
 
 #[test]
@@ -85,7 +96,10 @@ fn wrong_region_cannot_use_a_permit_to_read_other_state() {
     let second = GuardedActorRegion::new(5, 99_i64).unwrap();
     first.request(1, 5, Mode::Read).unwrap();
     let scope = first.admit_ready().unwrap().pop().unwrap();
-    assert_eq!(second.execute_read(scope, |v| *v), Err(RuntimeError::ForeignRegion));
+    assert_eq!(
+        second.execute_read(scope, |v| *v),
+        Err(RuntimeError::ForeignRegion)
+    );
     assert_eq!(first.active_count(), Ok(0));
     second.request(1, 5, Mode::Read).unwrap();
     let scope = second.admit_ready().unwrap().pop().unwrap();
@@ -101,16 +115,26 @@ fn retirement_waits_for_real_in_flight_reader() {
     let barrier = Arc::new(Barrier::new(2));
     let b = Arc::clone(&barrier);
     let state_for_reader = Arc::clone(&state);
-    let reader = thread::spawn(move || state_for_reader.execute_read(scope, |v| {
-        entered_tx.send(()).unwrap();
-        b.wait();
-        *v
-    }).unwrap());
+    let reader = thread::spawn(move || {
+        state_for_reader
+            .execute_read(scope, |v| {
+                entered_tx.send(()).unwrap();
+                b.wait();
+                *v
+            })
+            .unwrap()
+    });
     entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
     state.retire(9).unwrap();
     assert_eq!(state.may_reclaim(), Ok(false));
-    assert_eq!(state.request(12, 8, Mode::Write), Err(RuntimeError::Guard(GuardError::StaleGeneration)));
-    assert_eq!(state.request(12, 9, Mode::Write), Err(RuntimeError::Guard(GuardError::Retired)));
+    assert_eq!(
+        state.request(12, 8, Mode::Write),
+        Err(RuntimeError::Guard(GuardError::StaleGeneration))
+    );
+    assert_eq!(
+        state.request(12, 9, Mode::Write),
+        Err(RuntimeError::Guard(GuardError::Retired))
+    );
     barrier.wait();
     assert_eq!(reader.join().unwrap(), 5);
     assert_eq!(state.active_count(), Ok(0));
@@ -141,10 +165,22 @@ fn cancellation_drops_pending_but_does_not_revoke_admitted_holder() {
     let first = state.request(1, 12, Mode::Write).unwrap();
     let second = state.request(2, 12, Mode::Read).unwrap();
     let writer = state.admit_ready().unwrap().pop().unwrap();
-    assert_eq!(state.cancel_pending(first, 1, 12), Err(RuntimeError::Guard(GuardError::UnknownTicket)));
-    assert_eq!(state.cancel_pending(second, 1, 12), Err(RuntimeError::Guard(GuardError::WrongHolder)));
+    assert_eq!(
+        state.cancel_pending(first, 1, 12),
+        Err(RuntimeError::Guard(GuardError::UnknownTicket))
+    );
+    assert_eq!(
+        state.cancel_pending(second, 1, 12),
+        Err(RuntimeError::Guard(GuardError::WrongHolder))
+    );
     state.cancel_pending(second, 2, 12).unwrap();
-    assert_eq!(state.execute_write(writer, |v| { *v *= 2; *v }), Ok(6));
+    assert_eq!(
+        state.execute_write(writer, |v| {
+            *v *= 2;
+            *v
+        }),
+        Ok(6)
+    );
     assert!(state.admit_ready().unwrap().is_empty());
     assert_eq!(state.active_count(), Ok(0));
 }
@@ -161,7 +197,10 @@ fn unwinding_releases_logical_permit_and_poisoned_state_fails_closed() {
     assert_eq!(state.active_count(), Ok(0));
     state.request(2, 15, Mode::Read).unwrap();
     let scope = state.admit_ready().unwrap().pop().unwrap();
-    assert_eq!(state.execute_read(scope, |v| *v), Err(RuntimeError::Poisoned));
+    assert_eq!(
+        state.execute_read(scope, |v| *v),
+        Err(RuntimeError::Poisoned)
+    );
     state.retire(16).unwrap();
     assert_eq!(state.may_reclaim(), Ok(true));
 }
