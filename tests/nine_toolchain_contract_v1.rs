@@ -213,6 +213,71 @@ fn canonical_rust_v0_agrees_on_all_21_representable_cases() {
     assert!(!ids.contains("C20"), "unknown-effect case belongs to MIR validation");
 }
 
+// Test-only MIR wrapper for cross-checking the public verifier entrypoint.
+// IDs are synthetic from the fixture; they DO NOT authenticate compiler
+// provenance or represent independently enumerated source instructions.
+fn model_envelope(program: &Program) -> MirFunction {
+    let mut next = 1u64;
+    let mut expected_instruction_ids = Vec::new();
+    let mut blocks = Vec::new();
+    for block in &program.blocks {
+        let mut instructions = Vec::new();
+        for operation in &block.operations {
+            let id = next;
+            next += 1;
+            expected_instruction_ids.push(id);
+            let effect = match operation {
+                Op::Suspend => Effect::Suspension,
+                Op::ActorHopBorrow { .. } => Effect::ActorBoundary,
+                Op::Return => Effect::Control,
+                _ => Effect::Ownership,
+            };
+            instructions.push(Instruction {
+                instruction_id: id,
+                source_node_id: id + 100,
+                effect,
+                operation: operation.clone(),
+            });
+        }
+        blocks.push(MirBlock {
+            id: block.id,
+            instructions,
+            successors: block.successors.clone(),
+        });
+    }
+    MirFunction {
+        version: CONTRACT_VERSION.into(),
+        producer: Producer {
+            compiler_git_sha: "a".repeat(40),
+            source_sha256: "b".repeat(64),
+            source_unit_id: 1,
+            function_id: 1,
+        },
+        entry: program.entry,
+        expected_instruction_ids,
+        blocks,
+    }
+}
+
+#[test]
+fn canonical_verifier_and_strict_mir_entrypoint_agree_on_representable_cases() {
+    for fixture in all_native_cases() {
+        let direct = verify(&fixture.program);
+        let via_mir = verify_mir(&model_envelope(&fixture.program));
+        match (direct, via_mir) {
+            (Ok(left), Ok(right)) => {
+                assert_eq!(left, right, "cleanup plan mismatch in {}", fixture.id);
+            }
+            (Err(left), Err(MirError::Unsafe(right))) => {
+                assert_eq!(left, right, "diagnostic mismatch in {}", fixture.id);
+            }
+            (left, right) => {
+                panic!("V0/MIR disagreed in {}: {:?} vs {:?}", fixture.id, left, right);
+            }
+        }
+    }
+}
+
 #[test]
 fn c20_unknown_foreign_effect_is_rejected_by_real_mir_envelope() {
     let function = MirFunction {
