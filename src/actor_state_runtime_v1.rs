@@ -273,7 +273,10 @@ mod deferred_release_tests {
         drop(scope);
         assert_eq!(region.active_count(), Err(RuntimeError::Poisoned));
         assert_eq!(region.active_count(), Err(RuntimeError::Poisoned));
-        assert_eq!(region.request(2, 7, Mode::Read), Err(RuntimeError::Poisoned));
+        assert_eq!(
+            region.request(2, 7, Mode::Read),
+            Err(RuntimeError::Poisoned)
+        );
         assert_eq!(region.retire(8), Err(RuntimeError::Poisoned));
         assert_eq!(region.may_reclaim(), Err(RuntimeError::Poisoned));
     }
