@@ -6,6 +6,7 @@
 //! scheduler, actor identity authenticator, or hot-upgrade implementation.
 use std::cell::Cell;
 use std::marker::PhantomData;
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock, TryLockError};
 
 use crate::actor_state_guard_v1::{GuardError, GuardQueue, Mode, Permit};
@@ -29,8 +30,33 @@ impl From<GuardError> for RuntimeError {
 /// access occurs inside a non-escaping closure while an actual lock is held.
 #[derive(Debug)]
 pub struct GuardedActorRegion<T> {
-    queue: Mutex<GuardQueue>,
+    queue: Mutex<QueuedPermits>,
+    // Scope Drop never waits for the queue mutex.
+    releases: Sender<Permit>,
     state: RwLock<T>,
+}
+
+#[derive(Debug)]
+struct QueuedPermits {
+    guard: GuardQueue,
+    releases: Receiver<Permit>,
+}
+
+impl QueuedPermits {
+    // The physical lock has been dropped before a scope posts completion.
+    // Draining under a short-lived queue lock linearizes completion against
+    // retirement and admissions; a failure fails closed.
+    fn drain_completed(&mut self) -> Result<(), RuntimeError> {
+        while let Ok(permit) = self.releases.try_recv() {
+            if self.guard.is_retired() {
+                self.guard
+                    .complete_physical_quiescence(&permit, permit.actor())?;
+            } else {
+                self.guard.release(&permit, permit.actor())?;
+            }
+        }
+        Ok(())
+    }
 }
 
 /// One logical admission. Not Clone and not Sync: safe Rust cannot
@@ -48,32 +74,35 @@ impl<T> Drop for ActorScope<T> {
         let Some(permit) = self.permit.take() else {
             return;
         };
-        // Drop occurs after any physical RwLock guard in execute_read/write
-        // has been released. A poisoned queue is never treated as quiescent.
-        if let Ok(mut queue) = self.region.queue.lock() {
-            if queue.is_retired() {
-                let _ = queue.complete_physical_quiescence(&permit, permit.actor());
-            } else {
-                let _ = queue.release(&permit, permit.actor());
-            }
-        }
+        // Never park a scheduler carrier while another thread holds the
+        // queue mutex. The Arc retains the receiver until this scope drops.
+        // If the channel were unexpectedly disconnected, the outstanding
+        // guard stays charged rather than falsely proving quiescence.
+        let _ = self.region.releases.send(permit);
     }
 }
 
 impl<T> GuardedActorRegion<T> {
     pub fn new(generation: u64, initial: T) -> Result<Arc<Self>, RuntimeError> {
+        let (send, receive) = mpsc::channel();
         Ok(Arc::new(Self {
-            queue: Mutex::new(GuardQueue::new(generation)?),
+            queue: Mutex::new(QueuedPermits {
+                guard: GuardQueue::new(generation)?,
+                releases: receive,
+            }),
+            releases: send,
             state: RwLock::new(initial),
         }))
     }
 
-    fn queue(&self) -> Result<MutexGuard<'_, GuardQueue>, RuntimeError> {
-        match self.queue.try_lock() {
-            Ok(lock) => Ok(lock),
-            Err(TryLockError::WouldBlock) => Err(RuntimeError::Busy),
-            Err(TryLockError::Poisoned(_)) => Err(RuntimeError::Poisoned),
-        }
+    fn queue(&self) -> Result<MutexGuard<'_, QueuedPermits>, RuntimeError> {
+        let mut lock = match self.queue.try_lock() {
+            Ok(lock) => lock,
+            Err(TryLockError::WouldBlock) => return Err(RuntimeError::Busy),
+            Err(TryLockError::Poisoned(_)) => return Err(RuntimeError::Poisoned),
+        };
+        lock.drain_completed()?;
+        Ok(lock)
     }
 
     /// Caller must already have independently authenticated an actor
@@ -84,13 +113,13 @@ impl<T> GuardedActorRegion<T> {
         generation: u64,
         mode: Mode,
     ) -> Result<u64, RuntimeError> {
-        Ok(self.queue()?.request(trusted_actor, generation, mode)?)
+        Ok(self.queue()?.guard.request(trusted_actor, generation, mode)?)
     }
 
     /// No carrier sleep. A later reader cannot pass a queued writer.
     /// All returned scopes are owned by the trusted host, never the guest.
     pub fn admit_ready(self: &Arc<Self>) -> Result<Vec<ActorScope<T>>, RuntimeError> {
-        let permits = self.queue()?.admit_ready();
+        let permits = self.queue()?.guard.admit_ready();
         Ok(permits
             .into_iter()
             .map(|permit| ActorScope {
@@ -109,27 +138,28 @@ impl<T> GuardedActorRegion<T> {
     ) -> Result<(), RuntimeError> {
         Ok(self
             .queue()?
+            .guard
             .cancel_pending(ticket, trusted_actor, generation)?)
     }
 
     /// Logical STOP/upgrade fence. Already-entered closures may finish,
     /// but memory cannot be reclaimed until each physical scope exits.
     pub fn retire(&self, next_generation: u64) -> Result<(), RuntimeError> {
-        Ok(self.queue()?.retire(next_generation)?)
+        Ok(self.queue()?.guard.retire(next_generation)?)
     }
 
     /// Necessary, not sufficient, for true heap reclamation. Callers must
     /// also own the allocation and ensure no FFI/raw-pointer escape exists.
     pub fn may_reclaim(&self) -> Result<bool, RuntimeError> {
-        Ok(self.queue()?.may_reclaim())
+        Ok(self.queue()?.guard.may_reclaim())
     }
 
     pub fn active_count(&self) -> Result<usize, RuntimeError> {
-        Ok(self.queue()?.active_count())
+        Ok(self.queue()?.guard.active_count())
     }
 
     pub fn waiting_count(&self) -> Result<usize, RuntimeError> {
-        Ok(self.queue()?.waiting_count())
+        Ok(self.queue()?.guard.waiting_count())
     }
 
     /// Consumes a read scope, preventing a loan from escaping via a guard
@@ -151,7 +181,7 @@ impl<T> GuardedActorRegion<T> {
         {
             let queue = self.queue()?;
             let permit = scope.permit.as_ref().ok_or(RuntimeError::Poisoned)?;
-            queue.access(permit, permit.actor(), false)?;
+            queue.guard.access(permit, permit.actor(), false)?;
         }
         let output = callback(&state);
         drop(state); // actual RwLock before logical loan completion
@@ -180,11 +210,62 @@ impl<T> GuardedActorRegion<T> {
         {
             let queue = self.queue()?;
             let permit = scope.permit.as_ref().ok_or(RuntimeError::Poisoned)?;
-            queue.access(permit, permit.actor(), true)?;
+            queue.guard.access(permit, permit.actor(), true)?;
         }
         let output = callback(&mut state);
         drop(state);
         drop(scope);
         Ok(output)
+    }
+}
+
+#[cfg(test)]
+mod deferred_release_tests {
+    use super::*;
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::Duration;
+
+    #[test]
+    fn drop_never_waits_for_concurrently_held_queue_mutex() {
+        let region = GuardedActorRegion::new(1, 0_u64).unwrap();
+        region.request(1, 1, Mode::Read).unwrap();
+        let scope = region.admit_ready().unwrap().pop().unwrap();
+        let held_queue = region.queue.lock().unwrap();
+        let (tx, rx) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            drop(scope);
+            tx.send(()).unwrap();
+        });
+        let result = rx.recv_timeout(Duration::from_secs(5));
+        drop(held_queue);
+        worker.join().unwrap();
+        assert!(result.is_ok(), "scope Drop parked waiting for queue mutex");
+        assert_eq!(region.active_count(), Ok(0));
+    }
+
+    #[test]
+    fn deferred_scope_release_drains_after_stop_without_early_reclaim() {
+        let region = GuardedActorRegion::new(4, 10_u64).unwrap();
+        region.request(42, 4, Mode::Write).unwrap();
+        let scope = region.admit_ready().unwrap().pop().unwrap();
+        region.retire(5).unwrap();
+        let held_queue = region.queue.lock().unwrap();
+        let (tx, rx) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            drop(scope);
+            tx.send(()).unwrap();
+        });
+        let result = rx.recv_timeout(Duration::from_secs(5));
+        // No other method could observe completion while queue held.
+        assert_eq!(held_queue.guard.active_count(), 1);
+        drop(held_queue);
+        worker.join().unwrap();
+        assert!(result.is_ok(), "retired scope Drop parked");
+        assert_eq!(region.may_reclaim(), Ok(true));
+        assert_eq!(
+            region.request(7, 5, Mode::Write),
+            Err(RuntimeError::Guard(GuardError::Retired))
+        );
     }
 }
