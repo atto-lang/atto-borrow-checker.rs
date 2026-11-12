@@ -103,10 +103,13 @@ fn unused_granted_scope_releases_before_next_fifo_writer() {
     assert_eq!(region.active_count(), Ok(0));
     let writer = region.admit_ready().unwrap().pop().unwrap();
     assert!(region.admit_ready().unwrap().is_empty());
-    assert_eq!(region.execute_write(writer, |value| {
-        *value += 42;
-        *value
-    }), Ok(42));
+    assert_eq!(
+        region.execute_write(writer, |value| {
+            *value += 42;
+            *value
+        }),
+        Ok(42)
+    );
 
     let last_reader = region.admit_ready().unwrap().pop().unwrap();
     assert_eq!(region.execute_read(last_reader, |value| *value), Ok(42));
