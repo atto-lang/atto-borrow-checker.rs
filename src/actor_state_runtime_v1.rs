@@ -124,27 +124,29 @@ impl<T> GuardedActorRegion<T> {
         generation: u64,
         mode: Mode,
     ) -> Result<u64, RuntimeError> {
-        // Once an untrusted writer callback panics, the physical RwLock is
-        // poisoned. Do not continue minting logical actor authority for state
-        // that is no longer safe to admit; retirement remains available.
+        // Serialize the physical poison check with queue mutations. If the
+        // last writer panicked before this lock was acquired, never mint a
+        // logical permit for a poisoned region. An in-flight writer remains
+        // active in GuardQueue, so no reader can overtake its later panic.
+        let mut queue = self.queue()?;
         if self.state.is_poisoned() {
             return Err(RuntimeError::Poisoned);
         }
-        Ok(self
-            .queue()?
-            .guard
-            .request(trusted_actor, generation, mode)?)
+        Ok(queue.guard.request(trusted_actor, generation, mode)?)
     }
 
     /// No carrier sleep. A later reader cannot pass a queued writer.
     /// All returned scopes are owned by the trusted host, never the guest.
     pub fn admit_ready(self: &Arc<Self>) -> Result<Vec<ActorScope<T>>, RuntimeError> {
-        // Check again after requests have queued: poisoning may occur between
-        // request() and this admission. Retire() can still clear old tickets.
+        // Do NOT sample poisoned state before acquiring the queue mutex: the
+        // active writer could unwind while this caller waits to acquire it.
+        // Queue lock + active writer tracking prevent admitting a stale reader
+        // after the writer's physical RwLock is poisoned. Retire still works.
+        let mut queue = self.queue()?;
         if self.state.is_poisoned() {
             return Err(RuntimeError::Poisoned);
         }
-        let permits = self.queue()?.guard.admit_ready();
+        let permits = queue.guard.admit_ready();
         Ok(permits
             .into_iter()
             .map(|permit| ActorScope {
