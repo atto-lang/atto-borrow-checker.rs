@@ -11,7 +11,10 @@ fn source_native_gate_covers_actor_scope_changes() {
         "tests/actor_state_runtime_v1.rs",
         ".github/workflows/rust-actor-exact-ephemeral.yml",
     ] {
-        assert!(native.contains(&format!("- \"{path}\"")), "missing native CI path: {path}");
+        assert!(
+            native.contains(&format!("- \"{path}\"")),
+            "missing native CI path: {path}"
+        );
     }
 }
 
@@ -39,6 +42,9 @@ fn manual_source_local_runner_cannot_be_pr_triggered_or_unreviewed() {
         "persist-credentials: false",
         "cargo test --all-targets --locked",
     ] {
-        assert!(yml.contains(required), "missing trusted-runner gate: {required}");
+        assert!(
+            yml.contains(required),
+            "missing trusted-runner gate: {required}"
+        );
     }
 }
