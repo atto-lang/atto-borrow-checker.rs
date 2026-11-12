@@ -22,6 +22,7 @@ const MAX_LOANS: usize = 1024;
 const MAX_BLOCKS: usize = 4096;
 const MAX_EDGES: usize = 16384;
 const MAX_OPERATIONS_PER_BLOCK: usize = 1024;
+const MAX_OPERATIONS: usize = 100_000;
 // An opt-in verifier trace must be bounded independently of the CFG budgets.
 const MAX_SHADOW_EVENTS_V0: usize = 65_536;
 
@@ -551,11 +552,18 @@ fn verify_internal(
     // definitions or edges. An oversized block of repeated reads must not
     // consume unbounded work before reaching its eventual budget rejection.
     let mut preflight_edges = 0usize;
+    let mut preflight_operations = 0usize;
     for block in &program.blocks {
         preflight_edges = preflight_edges
             .checked_add(block.successors.len())
             .ok_or_else(|| structural("E_CFG_BUDGET"))?;
-        if block.operations.len() > MAX_OPERATIONS_PER_BLOCK || preflight_edges > MAX_EDGES {
+        preflight_operations = preflight_operations
+            .checked_add(block.operations.len())
+            .ok_or_else(|| structural("E_CFG_BUDGET"))?;
+        if block.operations.len() > MAX_OPERATIONS_PER_BLOCK
+            || preflight_edges > MAX_EDGES
+            || preflight_operations > MAX_OPERATIONS
+        {
             return Err(structural("E_CFG_BUDGET"));
         }
     }
