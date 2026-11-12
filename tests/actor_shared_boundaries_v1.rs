@@ -1,9 +1,7 @@
 use atto_borrow_checker::mir_v1::{
     verify_mir, Effect, Instruction, MirBlock, MirError, MirFunction, Producer, CONTRACT_VERSION,
 };
-use atto_borrow_checker::{
-    verify, verify_with_shadow_v0, Block, BorrowKind, Op, Program, Traits,
-};
+use atto_borrow_checker::{verify, verify_with_shadow_v0, Block, BorrowKind, Op, Program, Traits};
 
 fn init(owner: u32, copy: bool, send: bool) -> Op {
     Op::Init {
@@ -57,7 +55,11 @@ fn owned_actor_send_moves_unique_owner_out_of_sender_cleanup() {
 #[test]
 fn non_send_and_live_loan_cannot_cross_owned_actor_boundary() {
     assert_eq!(
-        code(vec![init(1, false, false), Op::ActorSendMove { owner: 1 }, ret()]),
+        code(vec![
+            init(1, false, false),
+            Op::ActorSendMove { owner: 1 },
+            ret()
+        ]),
         "E_ACTOR_SEND_PROOF_REQUIRED"
     );
     assert_eq!(
@@ -78,11 +80,19 @@ fn non_send_and_live_loan_cannot_cross_owned_actor_boundary() {
 #[test]
 fn copied_actor_mail_requires_both_copy_and_send() {
     assert_eq!(
-        code(vec![init(1, false, true), Op::ActorSendCopy { owner: 1 }, ret()]),
+        code(vec![
+            init(1, false, true),
+            Op::ActorSendCopy { owner: 1 },
+            ret()
+        ]),
         "E_ACTOR_COPY_SEND_PROOF_REQUIRED"
     );
     assert_eq!(
-        code(vec![init(1, true, false), Op::ActorSendCopy { owner: 1 }, ret()]),
+        code(vec![
+            init(1, true, false),
+            Op::ActorSendCopy { owner: 1 },
+            ret()
+        ]),
         "E_ACTOR_COPY_SEND_PROOF_REQUIRED"
     );
     let proof = run(vec![

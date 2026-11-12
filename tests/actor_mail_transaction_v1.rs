@@ -1,9 +1,7 @@
 use atto_borrow_checker::mir_v1::{
     verify_mir, Effect, Instruction, MirBlock, MirError, MirFunction, Producer, CONTRACT_VERSION,
 };
-use atto_borrow_checker::{
-    verify, verify_with_shadow_v0, Block, BorrowKind, Op, Program, Traits,
-};
+use atto_borrow_checker::{verify, verify_with_shadow_v0, Block, BorrowKind, Op, Program, Traits};
 
 fn init(owner: u32, send: bool) -> Op {
     Op::Init {
@@ -97,12 +95,7 @@ fn pending_send_seals_all_local_aliasing_and_cross_boundary_operations() {
         },
     ] {
         assert_eq!(
-            rejected(vec![
-                init(1, true),
-                pending.clone(),
-                operation,
-                Op::Return,
-            ]),
+            rejected(vec![init(1, true), pending.clone(), operation, Op::Return,]),
             "E_ACTOR_SEND_PENDING"
         );
     }
@@ -183,11 +176,19 @@ fn unresolved_double_settle_and_unknown_tickets_fail_closed() {
         "E_ACTOR_SEND_UNRESOLVED"
     );
     assert_eq!(
-        rejected(vec![init(1, true), Op::ActorSendCommit { ticket: 9 }, Op::Return]),
+        rejected(vec![
+            init(1, true),
+            Op::ActorSendCommit { ticket: 9 },
+            Op::Return
+        ]),
         "E_UNKNOWN_ACTOR_SEND_TICKET"
     );
     assert_eq!(
-        rejected(vec![init(1, true), Op::ActorSendAbort { ticket: 9 }, Op::Return]),
+        rejected(vec![
+            init(1, true),
+            Op::ActorSendAbort { ticket: 9 },
+            Op::Return
+        ]),
         "E_UNKNOWN_ACTOR_SEND_TICKET"
     );
     assert_eq!(
