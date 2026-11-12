@@ -38,8 +38,12 @@ fn ret() -> Op {
 
 #[test]
 fn owned_actor_send_moves_unique_owner_out_of_sender_cleanup() {
-    let proof = run(vec![init(1, false, true), Op::ActorSendMove { owner: 1 }, ret()])
-        .expect("Send owner must transfer without a second owner");
+    let proof = run(vec![
+        init(1, false, true),
+        Op::ActorSendMove { owner: 1 },
+        ret(),
+    ])
+    .expect("Send owner must transfer without a second owner");
     assert!(proof.cleanup_by_exit[&0].is_empty());
     assert_eq!(
         code(vec![
