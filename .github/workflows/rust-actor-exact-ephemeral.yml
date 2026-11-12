@@ -56,6 +56,9 @@ jobs:
           test "$state" = "open"
           test "$private" = "true"
           [[ "$author_id" =~ ^[1-9][0-9]*$ ]]
+          # `gh --jq` sees process env, not shell-local bindings. Without
+          # exporting this, the reviewer!=author comparison silently weakens.
+          export AUTHOR_ID="$author_id"
           # Query the exact Git object, not the mutable branch name.
           test "$(gh api "repos/$GITHUB_REPOSITORY/git/commits/$SOURCE_SHA" --jq '.tree.sha')" = "$SOURCE_TREE"
           reviewers="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews?per_page=100" \
