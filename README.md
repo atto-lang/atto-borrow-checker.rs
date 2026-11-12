@@ -30,6 +30,14 @@ cargo test --all-targets --locked --release
 
 No external Rust dependencies are required. The reconciled baseline has executed local Rust tests; see [integration evidence and remaining work](docs/INTEGRATION_BASELINE.md). These are library/model tests, **not guest compiler certification**. The crate does not parse .atto, verify type trait/layout provenance, prove pinned continuations, or integrate into production backend code generation. V0/MIR V1 still reject cyclic CFGs. Do not promote host-only assertions to guest compiler certification.
 
+V0 preflights a cumulative 100,000-operation limit as well as per-block and
+edge limits, before semantic scanning or shadow publication. MIR uses the same
+cumulative limit. Boundary tests admit exactly 100,000 operations and reject
+100,001. An independent straight-line specification checks both solvers against
+all 66,430 sequences of zero through five operations over nine read/write,
+loan, drop and suspension operations. This exhausts that finite subset only;
+it does not certify arbitrary loops, projections, compiler adapters or guests.
+
 V0 now also distinguishes actor-owned mailbox moves and Copy+Send snapshots from explicit immutable publication and runtime-owned guarded promotion. A three-phase actor-mail transaction (`ActorSendPrepare`, `ActorSendCommit`, `ActorSendAbort`) models exclusive pending-owner escrow and sender rollback across CFG paths; it does **not** implement actual mailbox admission or runtime cancellation fencing. These are **static ownership handoff preflights**, not shared memory access grants or proof of actual per-actor heap placement. See [actor/shared ownership boundaries](docs/ACTOR_SHARED_OWNERSHIP_BOUNDARIES_V1.md) and [the dedicated negative tests](tests/actor_shared_boundaries_v1.rs).
 
 `mir_v1::verify_mir_with_shadow_v0` validates the full operation inventory and input budgets before canonical verification, and publishes observations only after the entire CFG succeeds. Native compiler adapters remain responsible for independently deriving the complete typed inventory.

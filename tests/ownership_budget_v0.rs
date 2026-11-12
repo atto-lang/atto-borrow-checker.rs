@@ -100,3 +100,46 @@ fn exact_block_operation_limit_remains_admitted() {
     };
     assert_eq!(verify(&program).unwrap().cleanup_by_exit[&0], vec![1]);
 }
+
+fn operation_chain(total: usize) -> Program {
+    let mut blocks = Vec::new();
+    let mut remaining = total;
+    while remaining > 0 {
+        let count = remaining.min(1024);
+        remaining -= count;
+        let id = blocks.len() as u32;
+        let mut operations = vec![Op::Suspend; count];
+        let successors = if remaining == 0 {
+            *operations.last_mut().unwrap() = Op::Return;
+            vec![]
+        } else {
+            vec![id + 1]
+        };
+        blocks.push(Block {
+            id,
+            operations,
+            successors,
+        });
+    }
+    Program { entry: 0, blocks }
+}
+
+#[test]
+fn exact_cumulative_operation_limit_remains_admitted() {
+    assert!(verify(&operation_chain(100_000)).is_ok());
+}
+
+#[test]
+fn cumulative_operation_budget_precedes_semantics_and_shadow_publication() {
+    let mut program = operation_chain(100_001);
+    program.blocks[0].operations[0] = Op::Read { owner: 0 };
+    assert_eq!(verify(&program).unwrap_err().code, "E_CFG_BUDGET");
+    let mut observed = 0;
+    let error = verify_with_shadow_v0(&program, &mut |_| {
+        observed += 1;
+        Ok(())
+    })
+    .unwrap_err();
+    assert_eq!(error.code, "E_CFG_BUDGET");
+    assert_eq!(observed, 0);
+}
