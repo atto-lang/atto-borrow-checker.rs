@@ -452,6 +452,6 @@ fn cyclic_oracle_matches_llvm_fixed_point_loop_decisions() {
     assert_eq!(proof.reachable_blocks, 3);
 
     // Moving a value on the backedge makes a later read unsafe.
-    let unsafe_loop = program(CyclicOp::Move(root));
+    let unsafe_loop = program(CyclicOp::Move(root.clone()));
     assert_eq!(check(&unsafe_loop).unwrap_err().code, Code::UseAfterMove);
 }
