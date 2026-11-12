@@ -197,7 +197,10 @@ fn unwinding_releases_logical_permit_and_poisoned_state_fails_closed() {
     assert_eq!(state.active_count(), Ok(0));
     // A poisoned physical lock cannot issue new logical permissions; this
     // used to mint a scope that was guaranteed to fail later on execution.
-    assert_eq!(state.request(2, 15, Mode::Read), Err(RuntimeError::Poisoned));
+    assert_eq!(
+        state.request(2, 15, Mode::Read),
+        Err(RuntimeError::Poisoned)
+    );
     assert!(matches!(state.admit_ready(), Err(RuntimeError::Poisoned)));
     state.retire(16).unwrap();
     assert_eq!(state.may_reclaim(), Ok(true));
@@ -215,7 +218,10 @@ fn queued_reader_cannot_be_admitted_after_writer_panic_and_stop_clears_tickets()
     assert!(panicked.is_err());
     assert_eq!(state.active_count(), Ok(0));
     assert_eq!(state.waiting_count(), Ok(1));
-    assert_eq!(state.request(3, 19, Mode::Read), Err(RuntimeError::Poisoned));
+    assert_eq!(
+        state.request(3, 19, Mode::Read),
+        Err(RuntimeError::Poisoned)
+    );
     assert!(matches!(state.admit_ready(), Err(RuntimeError::Poisoned)));
     state.retire(20).unwrap();
     assert_eq!(state.waiting_count(), Ok(0));
