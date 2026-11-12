@@ -1,0 +1,109 @@
+name: Atto Rust actor exact-head trusted ephemeral
+# Manual ONLY. Never let a self-hosted runner execute arbitrary PR-triggered code.
+# Install an isolated, single-job source-org runner with this label before use.
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Same-repository actor PR number"
+        required: true
+        type: string
+      source_sha:
+        description: "Exact 40-hex PR HEAD SHA"
+        required: true
+        type: string
+      source_tree:
+        description: "Exact 40-hex Git root tree SHA"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: atto-rust-actor-${{ inputs.pr_number }}-${{ inputs.source_sha }}
+  cancel-in-progress: false
+
+jobs:
+  actor-native:
+    if: github.repository == 'ores-truffle-oreslang/atto-borrow-checker.rs' && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, linux, x64, atto-rust-ephemeral-v1]
+    timeout-minutes: 45
+    steps:
+      - name: Require protected main, exact in-repo PR head/tree, independent head approval
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          SOURCE_TREE: ${{ inputs.source_tree }}
+        run: |
+          set -euo pipefail
+          [[ "$PR_NUMBER" =~ ^[1-9][0-9]{0,7}$ ]]
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$SOURCE_TREE" =~ ^[0-9a-f]{40}$ ]]
+          test "$RUNNER_ENVIRONMENT" = "self-hosted"
+          test "$GITHUB_REPOSITORY" = "ores-truffle-oreslang/atto-borrow-checker.rs"
+          test "$GITHUB_REF" = "refs/heads/main"
+          command -v gh
+          test "$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.protected')" = "true"
+          data="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" \
+            --jq '[.head.sha,.head.repo.full_name,.state,(.head.repo.private|tostring),(.user.id|tostring)] | @tsv')"
+          IFS=$'\t' read -r actual_head actual_repo state private author_id <<< "$data"
+          test "$actual_head" = "$SOURCE_SHA"
+          test "$actual_repo" = "$GITHUB_REPOSITORY"
+          test "$state" = "open"
+          test "$private" = "true"
+          [[ "$author_id" =~ ^[1-9][0-9]*$ ]]
+          # Query the exact Git object, not the mutable branch name.
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/commits/$SOURCE_SHA" --jq '.tree.sha')" = "$SOURCE_TREE"
+          reviewers="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews?per_page=100" \
+            --jq 'if length >= 100 then "TOO_MANY_REVIEWS" else
+              ([.[] | select((.user.login|ascii_downcase) == "oresoftware"
+               and .state == "APPROVED" and .commit_id == env.SOURCE_SHA
+               and (.user.id|tostring) != env.AUTHOR_ID)] | length | tostring) end')"
+          # Do not silently trust a truncated review page or unapproved code.
+          [[ "$reviewers" =~ ^[1-9][0-9]*$ ]]
+          echo "EXACT_HEAD_TREE_INDEPENDENT_REVIEW=ADMITTED"
+      - name: Checkout immutable source head, do not persist credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Confirm exact checkout/tree and toolchain
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          SOURCE_TREE: ${{ inputs.source_tree }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$SOURCE_TREE"
+          test -z "$(git status --porcelain)"
+          command -v rustc
+          command -v cargo
+          command -v cargo-clippy
+          command -v rustfmt
+          rustc --version | grep -F 'rustc 1.99.1 '
+          mkdir -p target/atto-native-receipt
+          printf 'source_sha=%s\nsource_tree=%s\nrun_id=%s\nattempt=%s\nhost_native_only=true\nguest_parity=NOT_VERIFIED\n' \
+            "$SOURCE_SHA" "$SOURCE_TREE" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > target/atto-native-receipt/identity.txt
+      - name: Format, lint and execute all Rust tests (debug and release)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check
+          cargo clippy --all-targets --locked -- -D warnings
+          cargo test --all-targets --locked
+          cargo test --all-targets --locked --release
+          echo "executed_test_steps=4" > target/atto-native-receipt/test-summary.txt
+      - name: Preserve source-free receipt only
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: atto-rust-HOST-MODEL-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/atto-native-receipt/
+          if-no-files-found: warn
+          retention-days: 7
