@@ -58,91 +58,151 @@ fn case(id: &'static str, operations: Vec<Op>, diagnostic: Option<&'static str>)
 fn all_native_cases() -> Vec<Case> {
     use BorrowKind::{Mutable, Shared};
     vec![
-        case("C01", vec![init(1, true, false), Op::Read { owner: 1 }, Op::Return], None),
-        case("C02", vec![
-            init(1, false, false),
-            Op::Move { from: 1, into: 2 },
-            Op::Read { owner: 2 },
-            Op::Return,
-        ], None),
-        case("C03", vec![
-            init(1, false, false),
-            Op::Move { from: 1, into: 2 },
-            Op::Read { owner: 1 },
-            Op::Return,
-        ], Some("E_USE_AFTER_MOVE_OR_DROP")),
-        case("C04", vec![
-            init(1, false, false),
-            Op::Copy { from: 1, into: 2 },
-            Op::Return,
-        ], Some("E_COPY_PROOF_REQUIRED")),
-        case("C05", vec![
-            init(1, false, false),
-            borrow(1, 10, Shared),
-            borrow(1, 11, Shared),
-            Op::Read { owner: 1 },
-            Op::EndBorrow { loan: 11 },
-            Op::EndBorrow { loan: 10 },
-            Op::Return,
-        ], None),
-        case("C06", vec![
-            init(1, false, false),
-            borrow(1, 10, Shared),
-            borrow(1, 11, Mutable),
-            Op::Return,
-        ], Some("E_BORROW_CONFLICT")),
-        case("C07", vec![
-            init(1, false, false),
-            borrow(1, 10, Mutable),
-            Op::WriteThrough { owner: 1, loan: 10 },
-            Op::EndBorrow { loan: 10 },
-            Op::Return,
-        ], None),
-        case("C08", vec![
-            init(1, false, false),
-            borrow(1, 10, Shared),
-            Op::Write { owner: 1 },
-            Op::Return,
-        ], Some("E_BORROW_CONFLICT")),
-        case("C09", vec![
-            init(1, false, false),
-            borrow(1, 10, Shared),
-            Op::Drop { owner: 1 },
-            Op::Return,
-        ], Some("E_BORROW_CONFLICT")),
-        case("C10", vec![
-            init(1, false, false),
-            borrow(1, 10, Shared),
-            Op::Suspend,
-            Op::Return,
-        ], Some("E_SUSPEND_WITH_LIVE_LOAN")),
-        case("C11", vec![
-            init(1, false, false),
-            borrow(1, 10, Shared),
-            Op::EndBorrow { loan: 10 },
-            Op::Suspend,
-            Op::Return,
-        ], None),
-        case("C12", vec![
-            init(1, false, false),
-            Op::ActorHopBorrow { owner: 1 },
-            Op::Return,
-        ], Some("E_ACTOR_BORROW_ESCAPE")),
-        case("C13", vec![
-            init(1, true, false),
-            Op::TaskCaptureCopy { owner: 1 },
-            Op::Return,
-        ], Some("E_TASK_CAPTURE_PROOF")),
-        case("C14", vec![
-            init(1, false, true),
-            Op::TaskCaptureMove { owner: 1 },
-            Op::Return,
-        ], None),
-        case("C15", vec![
-            init(1, false, false),
-            Op::EndBorrow { loan: 10 },
-            Op::Return,
-        ], Some("E_UNKNOWN_LOAN")),
+        case(
+            "C01",
+            vec![init(1, true, false), Op::Read { owner: 1 }, Op::Return],
+            None,
+        ),
+        case(
+            "C02",
+            vec![
+                init(1, false, false),
+                Op::Move { from: 1, into: 2 },
+                Op::Read { owner: 2 },
+                Op::Return,
+            ],
+            None,
+        ),
+        case(
+            "C03",
+            vec![
+                init(1, false, false),
+                Op::Move { from: 1, into: 2 },
+                Op::Read { owner: 1 },
+                Op::Return,
+            ],
+            Some("E_USE_AFTER_MOVE_OR_DROP"),
+        ),
+        case(
+            "C04",
+            vec![
+                init(1, false, false),
+                Op::Copy { from: 1, into: 2 },
+                Op::Return,
+            ],
+            Some("E_COPY_PROOF_REQUIRED"),
+        ),
+        case(
+            "C05",
+            vec![
+                init(1, false, false),
+                borrow(1, 10, Shared),
+                borrow(1, 11, Shared),
+                Op::Read { owner: 1 },
+                Op::EndBorrow { loan: 11 },
+                Op::EndBorrow { loan: 10 },
+                Op::Return,
+            ],
+            None,
+        ),
+        case(
+            "C06",
+            vec![
+                init(1, false, false),
+                borrow(1, 10, Shared),
+                borrow(1, 11, Mutable),
+                Op::Return,
+            ],
+            Some("E_BORROW_CONFLICT"),
+        ),
+        case(
+            "C07",
+            vec![
+                init(1, false, false),
+                borrow(1, 10, Mutable),
+                Op::WriteThrough { owner: 1, loan: 10 },
+                Op::EndBorrow { loan: 10 },
+                Op::Return,
+            ],
+            None,
+        ),
+        case(
+            "C08",
+            vec![
+                init(1, false, false),
+                borrow(1, 10, Shared),
+                Op::Write { owner: 1 },
+                Op::Return,
+            ],
+            Some("E_BORROW_CONFLICT"),
+        ),
+        case(
+            "C09",
+            vec![
+                init(1, false, false),
+                borrow(1, 10, Shared),
+                Op::Drop { owner: 1 },
+                Op::Return,
+            ],
+            Some("E_BORROW_CONFLICT"),
+        ),
+        case(
+            "C10",
+            vec![
+                init(1, false, false),
+                borrow(1, 10, Shared),
+                Op::Suspend,
+                Op::Return,
+            ],
+            Some("E_SUSPEND_WITH_LIVE_LOAN"),
+        ),
+        case(
+            "C11",
+            vec![
+                init(1, false, false),
+                borrow(1, 10, Shared),
+                Op::EndBorrow { loan: 10 },
+                Op::Suspend,
+                Op::Return,
+            ],
+            None,
+        ),
+        case(
+            "C12",
+            vec![
+                init(1, false, false),
+                Op::ActorHopBorrow { owner: 1 },
+                Op::Return,
+            ],
+            Some("E_ACTOR_BORROW_ESCAPE"),
+        ),
+        case(
+            "C13",
+            vec![
+                init(1, true, false),
+                Op::TaskCaptureCopy { owner: 1 },
+                Op::Return,
+            ],
+            Some("E_TASK_CAPTURE_PROOF"),
+        ),
+        case(
+            "C14",
+            vec![
+                init(1, false, true),
+                Op::TaskCaptureMove { owner: 1 },
+                Op::Return,
+            ],
+            None,
+        ),
+        case(
+            "C15",
+            vec![
+                init(1, false, false),
+                Op::EndBorrow { loan: 10 },
+                Op::Return,
+            ],
+            Some("E_UNKNOWN_LOAN"),
+        ),
         Case {
             id: "C16",
             program: branching(vec![
@@ -157,8 +217,16 @@ fn all_native_cases() -> Vec<Case> {
             id: "C17",
             program: branching(vec![
                 block(0, vec![init(1, false, false)], vec![1, 2]),
-                block(1, vec![borrow(1, 10, Shared), Op::EndBorrow { loan: 10 }], vec![3]),
-                block(2, vec![borrow(1, 10, Shared), Op::EndBorrow { loan: 10 }], vec![3]),
+                block(
+                    1,
+                    vec![borrow(1, 10, Shared), Op::EndBorrow { loan: 10 }],
+                    vec![3],
+                ),
+                block(
+                    2,
+                    vec![borrow(1, 10, Shared), Op::EndBorrow { loan: 10 }],
+                    vec![3],
+                ),
                 block(3, vec![Op::Return], vec![]),
             ]),
             diagnostic: Some("E_LOAN_DEF_REUSED"),
@@ -181,15 +249,16 @@ fn all_native_cases() -> Vec<Case> {
             ]),
             diagnostic: Some("E_CFG_CYCLE_UNPROVEN"),
         },
-        case("C21", vec![
-            init(1, false, false),
-            Op::Read { owner: 1 },
-        ], Some("E_IMPLICIT_EXIT")),
-        case("C22", vec![
-            init(1, false, false),
-            borrow(1, 10, Shared),
-            Op::Return,
-        ], Some("E_LOAN_ESCAPE")),
+        case(
+            "C21",
+            vec![init(1, false, false), Op::Read { owner: 1 }],
+            Some("E_IMPLICIT_EXIT"),
+        ),
+        case(
+            "C22",
+            vec![init(1, false, false), borrow(1, 10, Shared), Op::Return],
+            Some("E_LOAN_ESCAPE"),
+        ),
     ]
 }
 
@@ -206,11 +275,17 @@ fn canonical_rust_v0_agrees_on_all_21_representable_cases() {
                 assert_eq!(actual.code, expected, "case {}", fixture.id);
             }
             (result, expected) => {
-                panic!("case {} outcome {:?}, expected {:?}", fixture.id, result, expected);
+                panic!(
+                    "case {} outcome {:?}, expected {:?}",
+                    fixture.id, result, expected
+                );
             }
         }
     }
-    assert!(!ids.contains("C20"), "unknown-effect case belongs to MIR validation");
+    assert!(
+        !ids.contains("C20"),
+        "unknown-effect case belongs to MIR validation"
+    );
 }
 
 // Test-only MIR wrapper for cross-checking the public verifier entrypoint.
@@ -272,7 +347,10 @@ fn canonical_verifier_and_strict_mir_entrypoint_agree_on_representable_cases() {
                 assert_eq!(left, right, "diagnostic mismatch in {}", fixture.id);
             }
             (left, right) => {
-                panic!("V0/MIR disagreed in {}: {:?} vs {:?}", fixture.id, left, right);
+                panic!(
+                    "V0/MIR disagreed in {}: {:?} vs {:?}",
+                    fixture.id, left, right
+                );
             }
         }
     }
@@ -317,7 +395,10 @@ fn c20_unknown_foreign_effect_is_rejected_by_real_mir_envelope() {
             successors: vec![],
         }],
     };
-    assert_eq!(verify_mir(&function), Err(MirError::Invalid("E_MIR_UNSUPPORTED_EFFECT")));
+    assert_eq!(
+        verify_mir(&function),
+        Err(MirError::Invalid("E_MIR_UNSUPPORTED_EFFECT"))
+    );
 }
 
 #[test]
@@ -325,14 +406,16 @@ fn zero_evidence_cannot_be_called_a_compiler_emission_proof() {
     // This test asserts API scope rather than guest certification. An
     // internal model verdict is not evidence of true source/LLVM/CIL/CLIF
     // emission inventories, even when all native cases accept.
-    assert_eq!(atto_borrow_checker::mir_v1::CONTRACT_VERSION, "atto-borrow-mir-v1");
+    assert_eq!(
+        atto_borrow_checker::mir_v1::CONTRACT_VERSION,
+        "atto-borrow-mir-v1"
+    );
 }
 
 #[test]
 fn cyclic_oracle_matches_llvm_fixed_point_loop_decisions() {
     use atto_borrow_checker::cyclic_v1::{
-        check, Block as CyclicBlock, Code, Op as CyclicOp, Place, Program as CyclicProgram,
-        Root,
+        check, Block as CyclicBlock, Code, Op as CyclicOp, Place, Program as CyclicProgram, Root,
     };
 
     let root = Place::root(1);
