@@ -124,6 +124,12 @@ impl<T> GuardedActorRegion<T> {
         generation: u64,
         mode: Mode,
     ) -> Result<u64, RuntimeError> {
+        // Once an untrusted writer callback panics, the physical RwLock is
+        // poisoned. Do not continue minting logical actor authority for state
+        // that is no longer safe to admit; retirement remains available.
+        if self.state.is_poisoned() {
+            return Err(RuntimeError::Poisoned);
+        }
         Ok(self
             .queue()?
             .guard
@@ -133,6 +139,11 @@ impl<T> GuardedActorRegion<T> {
     /// No carrier sleep. A later reader cannot pass a queued writer.
     /// All returned scopes are owned by the trusted host, never the guest.
     pub fn admit_ready(self: &Arc<Self>) -> Result<Vec<ActorScope<T>>, RuntimeError> {
+        // Check again after requests have queued: poisoning may occur between
+        // request() and this admission. Retire() can still clear old tickets.
+        if self.state.is_poisoned() {
+            return Err(RuntimeError::Poisoned);
+        }
         let permits = self.queue()?.guard.admit_ready();
         Ok(permits
             .into_iter()

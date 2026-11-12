@@ -195,12 +195,29 @@ fn unwinding_releases_logical_permit_and_poisoned_state_fails_closed() {
     }));
     assert!(result.is_err());
     assert_eq!(state.active_count(), Ok(0));
-    state.request(2, 15, Mode::Read).unwrap();
-    let scope = state.admit_ready().unwrap().pop().unwrap();
-    assert_eq!(
-        state.execute_read(scope, |v| *v),
-        Err(RuntimeError::Poisoned)
-    );
+    // A poisoned physical lock cannot issue new logical permissions; this
+    // used to mint a scope that was guaranteed to fail later on execution.
+    assert_eq!(state.request(2, 15, Mode::Read), Err(RuntimeError::Poisoned));
+    assert!(matches!(state.admit_ready(), Err(RuntimeError::Poisoned)));
     state.retire(16).unwrap();
+    assert_eq!(state.may_reclaim(), Ok(true));
+}
+
+#[test]
+fn queued_reader_cannot_be_admitted_after_writer_panic_and_stop_clears_tickets() {
+    let state = GuardedActorRegion::new(19, 7_i64).unwrap();
+    state.request(1, 19, Mode::Write).unwrap();
+    let writer = state.admit_ready().unwrap().pop().unwrap();
+    state.request(2, 19, Mode::Read).unwrap();
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _: Result<(), RuntimeError> = state.execute_write(writer, |_| panic!("actor crashed"));
+    }));
+    assert!(panicked.is_err());
+    assert_eq!(state.active_count(), Ok(0));
+    assert_eq!(state.waiting_count(), Ok(1));
+    assert_eq!(state.request(3, 19, Mode::Read), Err(RuntimeError::Poisoned));
+    assert!(matches!(state.admit_ready(), Err(RuntimeError::Poisoned)));
+    state.retire(20).unwrap();
+    assert_eq!(state.waiting_count(), Ok(0));
     assert_eq!(state.may_reclaim(), Ok(true));
 }

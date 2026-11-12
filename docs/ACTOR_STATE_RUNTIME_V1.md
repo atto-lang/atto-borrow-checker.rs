@@ -77,3 +77,7 @@ a one-time error into a later false proof that the region is reclaimable.
 The unit regression intentionally simulates an out-of-band host settlement,
 then verifies persistent rejection. Do not clear quarantine without an
 independent supervisor reconciliation and physical quiescence proof.
+
+### Fail-closed poisoned-lock admission
+
+If an executing writer callback unwinds, the physical Rust `RwLock` is poisoned. New `request` and `admit_ready` calls are denied before issuing any additional logical actor scopes, including the case where a read request was queued before the panic. Trusted-host `retire` remains available to invalidate the waiting tickets, and `may_reclaim` requires physical scope quiescence. This is an isolated host model of one region: it neither catches an unrecoverable native process crash nor automatically restarts a production actor.
