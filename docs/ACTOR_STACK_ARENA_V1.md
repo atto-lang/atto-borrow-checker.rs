@@ -10,21 +10,26 @@ never widened to a host pointer.
 
 - The host creates one arena per actor incarnation. The identity and generation
   supplied to the arena **must be authenticated** by the actual supervisor.
-  Two manually-created instances with the same IDs are not automatically
-  prevented; the runtime must own and enforce a unique actor-incarnation table.
+  A process-local instance counter blocks stale handle reuse across duplicate
+  constructions, but cannot prove supervisor authority or prevent persisted
+  generation reuse after a process restart.
 - The arena's entire byte allocation is dedicated to one instance. Offset 0 is
   reserved. Bounds arithmetic is checked, and alignment is relative to the
   arena offset, **not a guarantee of machine pointer alignment**.
 - Default limits: 64 KiB storage and 64 live frames. A smaller budget may be
   configured for tests. The metadata vector is preallocated during creation,
   so a frame push does not perform a host allocator call.
-- A handle contains actor ID, generation, monotonically assigned frame serial,
-  offset, and length; all fields are private. Every access rechecks the entire
-  handle against an active record. The same offset reused after pop cannot
-  resurrect an old handle.
+- A handle contains a process-unique arena-instance ID, actor ID, generation,
+  monotonically assigned frame serial, offset, and length; all fields are private.
+  Every access rechecks the complete handle against an active record. A second
+  arena with the *same* claimed actor and generation cannot resurrect an old
+  handle, even when the offset and frame serial happen to match. Exhausting the
+  process instance counter fails closed.
 - Writes require an exclusive trusted Rust borrow of the arena. The closure
   interface does not return a safe Rust frame borrow. There is no unsynchronized
   guest memory sharing or cross-actor pointer export.
+- Debug output redacts the backing frame contents and active handles to avoid
+  exposing potentially sensitive actor-local data through routine diagnostics.
 - Destruction is LIFO and clears retired frame bytes and padding on the push
   path's live arena. STOP/retirement invalidates all handles and clears the
   backing buffer, but the reference does **not** claim secure erasure from
@@ -65,7 +70,8 @@ Run with the exact PR head and a Rust toolchain:
     cargo test --all-targets --locked --release
 
 Integration tests cover actor identity collisions, stale generations,
-LIFO frame retirement, offset reuse, physically cleared slots, alignment
+LIFO frame retirement, offset reuse, duplicate-instance stale handles,
+redacted Debug output, physically cleared slots, alignment
 rejections, zero offsets, budget/depth faults and sibling survival.
 These are Rust host-side tests, **not** Atto guest certification.
 
