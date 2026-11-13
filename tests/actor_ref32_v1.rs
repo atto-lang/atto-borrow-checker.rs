@@ -36,6 +36,7 @@ fn case() -> (ActorArena, Allocation, Ref32, Loan) {
         arena_id: 3,
         incarnation: 2,
         generation: 7,
+        allocation_id: 99,
         mode: LoanMode::ExclusiveWrite,
         live: true,
     };
@@ -229,4 +230,37 @@ fn reject_4gib_plus_one_and_32_bit_wraparound() {
         AccessMode::Read
     )
     .is_ok());
+}
+
+#[test]
+fn null_guest_offset_is_rejected_even_when_allocation_claims_zero() {
+    let (arena, mut allocation, mut reference, loan) = case();
+    allocation.base = 0;
+    reference.offset = 0;
+    assert_eq!(
+        check_access(&arena, &allocation, &reference, &loan, 1, 1, AccessMode::Read),
+        Err(Ref32Error::NullReference)
+    );
+    reference.offset = 1;
+    assert_eq!(
+        check_access(&arena, &allocation, &reference, &loan, 1, 1, AccessMode::Read),
+        Err(Ref32Error::InvalidExtent)
+    );
+}
+
+#[test]
+fn same_actor_loan_for_different_allocation_never_authorizes_access() {
+    let (arena, allocation, reference, mut loan) = case();
+    loan.allocation_id = 100;
+    assert_eq!(
+        check_access(&arena, &allocation, &reference, &loan, 8, 8, AccessMode::Read),
+        Err(Ref32Error::WrongAllocation)
+    );
+    loan.allocation_id = 0;
+    assert_eq!(
+        check_access(&arena, &allocation, &reference, &loan, 8, 8, AccessMode::Write),
+        Err(Ref32Error::WrongAllocation)
+    );
+    loan.allocation_id = 99;
+    assert!(check_access(&arena, &allocation, &reference, &loan, 8, 8, AccessMode::Read).is_ok());
 }
