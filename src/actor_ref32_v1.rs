@@ -55,7 +55,7 @@ pub struct Ref32 {
 
 /// Metadata about a separately authenticated and physically held loan.
 /// A compiler-generated value of this type is NEVER a physical lock proof.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Loan {
     pub actor_id: u64,
     pub arena_id: u32,
