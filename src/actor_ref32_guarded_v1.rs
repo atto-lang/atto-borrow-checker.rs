@@ -174,8 +174,7 @@ impl GuardedRef32Arena {
         if !self.sealed {
             return Err(GuardedRef32Error::Unsealed);
         }
-        self.queue
-            .access(permit, trusted_holder, access.write)?;
+        self.queue.access(permit, trusted_holder, access.write)?;
         self.arena
             .checked_offset(
                 reference,
