@@ -1,7 +1,5 @@
 //! Independent ref32 metadata regressions; not native compiler/guest proof.
-use atto_borrow_checker::actor_arena_ref32_v1::{
-    ActorArenaRef32, Ref32Error, MAX_REF32_CAPACITY,
-};
+use atto_borrow_checker::actor_arena_ref32_v1::{ActorArenaRef32, Ref32Error, MAX_REF32_CAPACITY};
 
 #[test]
 fn actor_private_allocations_resolve_only_within_their_extent() {
@@ -81,8 +79,7 @@ fn failed_allocation_is_atomic_and_does_not_consume_space() {
 #[test]
 fn u32_boundary_never_widens_or_wraps_guest_offset() {
     assert_eq!(
-        ActorArenaRef32::new(1, 1, MAX_REF32_CAPACITY + 1)
-            .unwrap_err(),
+        ActorArenaRef32::new(1, 1, MAX_REF32_CAPACITY + 1).unwrap_err(),
         Ref32Error::InvalidCapacity
     );
     let mut arena = ActorArenaRef32::new(1, 1, MAX_REF32_CAPACITY).unwrap();
@@ -94,7 +91,10 @@ fn u32_boundary_never_widens_or_wraps_guest_offset() {
     );
     let final_byte = arena.allocate(1, 1).unwrap();
     assert_eq!(final_byte.offset(), u32::MAX);
-    assert_eq!(arena.checked_offset(final_byte, 1, 1, 0, 1, 1), Ok(u32::MAX));
+    assert_eq!(
+        arena.checked_offset(final_byte, 1, 1, 0, 1, 1),
+        Ok(u32::MAX)
+    );
     assert_eq!(arena.allocate(1, 1), Err(Ref32Error::Exhausted));
     assert_eq!(
         arena.checked_offset(max, 1, 1, u32::MAX - 1, 1, 1),
