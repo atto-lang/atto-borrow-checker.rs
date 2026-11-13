@@ -92,6 +92,9 @@ fn u32_boundary_never_widens_or_wraps_guest_offset() {
         arena.checked_offset(max, 1, 1, u32::MAX - 2, 1, 1),
         Ok(u32::MAX - 1)
     );
+    let final_byte = arena.allocate(1, 1).unwrap();
+    assert_eq!(final_byte.offset(), u32::MAX);
+    assert_eq!(arena.checked_offset(final_byte, 1, 1, 0, 1, 1), Ok(u32::MAX));
     assert_eq!(arena.allocate(1, 1), Err(Ref32Error::Exhausted));
     assert_eq!(
         arena.checked_offset(max, 1, 1, u32::MAX - 1, 1, 1),
