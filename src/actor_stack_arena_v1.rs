@@ -123,7 +123,7 @@ impl ActorStackArena {
             .try_reserve_exact(frame_limit)
             .map_err(|_| StackError::Exhausted)?;
         let instance = NEXT_ARENA_INSTANCE
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
             .map_err(|_| StackError::Exhausted)?;
         Ok(Self {
             instance,
