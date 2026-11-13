@@ -29,6 +29,8 @@ pub enum Effect {
     Ownership,
     Suspension,
     ActorBoundary,
+    /// Verified compiler-supplied lexical critical event, not a lock grant.
+    CriticalRegion,
     Control,
     /// Native FFI, unwind, cancellation, unknown lowering etc. fail closed.
     Unsupported,
@@ -82,6 +84,11 @@ fn expected_effect(op: &Op) -> Effect {
         | Op::ActorSendCopy { .. }
         | Op::PublishFrozen { .. }
         | Op::PromoteGuarded { .. } => Effect::ActorBoundary,
+        Op::CriticalReadEnter { .. }
+        | Op::CriticalWriteEnter { .. }
+        | Op::CriticalReadAccess { .. }
+        | Op::CriticalWriteAccess { .. }
+        | Op::CriticalExit { .. } => Effect::CriticalRegion,
         Op::Return => Effect::Control,
         _ => Effect::Ownership,
     }
