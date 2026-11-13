@@ -119,3 +119,55 @@ fn unused_granted_scope_releases_before_next_fifo_writer() {
     assert_eq!(region.execute_read(reused, |value| *value), Ok(42));
     assert_eq!(region.active_count(), Ok(0));
 }
+
+/// A burst of later readers must never starve an earlier queued writer.
+/// Prove the initial reader actually holds the physical RwLock, rather than
+/// relying on sleeps or just observing logical ticket counts.
+#[test]
+fn queued_writer_survives_a_burst_of_one_hundred_twenty_eight_later_readers() {
+    let region = GuardedActorRegion::new(61, 0_i64).unwrap();
+    region.request(1, 61, Mode::Read).unwrap();
+    let first_reader = region.admit_ready().unwrap().pop().unwrap();
+
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let worker_region = Arc::clone(&region);
+    let first = thread::spawn(move || {
+        worker_region.execute_read(first_reader, |value| {
+            entered_tx.send(()).unwrap();
+            release_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            *value
+        })
+    });
+    entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+
+    region.request(2, 61, Mode::Write).unwrap();
+    for actor in 100_u64..228 {
+        region.request(actor, 61, Mode::Read).unwrap();
+    }
+    assert_eq!(region.waiting_count(), Ok(129));
+    assert_eq!(region.active_count(), Ok(1));
+    assert!(region.admit_ready().unwrap().is_empty());
+
+    release_tx.send(()).unwrap();
+    assert_eq!(first.join().unwrap(), Ok(0));
+    let writers = region.admit_ready().unwrap();
+    assert_eq!(writers.len(), 1, "queued writer must be admitted first");
+    assert_eq!(region.active_count(), Ok(1));
+    assert!(region.admit_ready().unwrap().is_empty());
+    assert_eq!(
+        region.execute_write(writers.into_iter().next().unwrap(), |value| {
+            *value = 42;
+            *value
+        }),
+        Ok(42)
+    );
+
+    let readers = region.admit_ready().unwrap();
+    assert_eq!(readers.len(), 128, "all later readers must follow writer");
+    for reader in readers {
+        assert_eq!(region.execute_read(reader, |value| *value), Ok(42));
+    }
+    assert_eq!(region.active_count(), Ok(0));
+    assert_eq!(region.waiting_count(), Ok(0));
+}
