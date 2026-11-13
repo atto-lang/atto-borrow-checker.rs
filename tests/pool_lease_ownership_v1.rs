@@ -6,11 +6,21 @@ use atto_borrow_checker::{verify, Block, BorrowKind, Op, Program, Traits};
 fn run(ops: Vec<Op>) -> Result<atto_borrow_checker::Proof, atto_borrow_checker::Diagnostic> {
     verify(&Program {
         entry: 0,
-        blocks: vec![Block { id: 0, operations: ops, successors: vec![] }],
+        blocks: vec![Block {
+            id: 0,
+            operations: ops,
+            successors: vec![],
+        }],
     })
 }
 fn init() -> Op {
-    Op::Init { owner: 1, traits: Traits { is_copy: false, is_send: true } }
+    Op::Init {
+        owner: 1,
+        traits: Traits {
+            is_copy: false,
+            is_send: true,
+        },
+    }
 }
 fn fail(ops: Vec<Op>, expected: &str) {
     assert_eq!(run(ops).unwrap_err().code, expected);
@@ -18,109 +28,178 @@ fn fail(ops: Vec<Op>, expected: &str) {
 
 #[test]
 fn pool_lease_cannot_recycle_while_a_read_loan_is_active() {
-    fail(vec![
-        init(),
-        Op::Borrow { owner: 1, loan: 7, kind: BorrowKind::Shared },
-        Op::Drop { owner: 1 },
-        Op::Return,
-    ], "E_BORROW_CONFLICT");
+    fail(
+        vec![
+            init(),
+            Op::Borrow {
+                owner: 1,
+                loan: 7,
+                kind: BorrowKind::Shared,
+            },
+            Op::Drop { owner: 1 },
+            Op::Return,
+        ],
+        "E_BORROW_CONFLICT",
+    );
 }
 #[test]
 fn pool_lease_cannot_recycle_while_mutably_borrowed() {
-    fail(vec![
-        init(),
-        Op::Borrow { owner: 1, loan: 7, kind: BorrowKind::Mutable },
-        Op::Drop { owner: 1 },
-        Op::Return,
-    ], "E_BORROW_CONFLICT");
+    fail(
+        vec![
+            init(),
+            Op::Borrow {
+                owner: 1,
+                loan: 7,
+                kind: BorrowKind::Mutable,
+            },
+            Op::Drop { owner: 1 },
+            Op::Return,
+        ],
+        "E_BORROW_CONFLICT",
+    );
 }
 #[test]
 fn pool_lease_escrow_blocks_access_and_recycle() {
-    for blocked in [Op::Read { owner: 1 }, Op::Write { owner: 1 },
-                    Op::Drop { owner: 1 }, Op::ActorSendMove { owner: 1 }] {
-        fail(vec![
-            init(),
-            Op::ActorSendPrepare { owner: 1, ticket: 9 },
-            blocked,
-            Op::ActorSendAbort { ticket: 9 },
-            Op::Return,
-        ], "E_ACTOR_SEND_PENDING");
+    for blocked in [
+        Op::Read { owner: 1 },
+        Op::Write { owner: 1 },
+        Op::Drop { owner: 1 },
+        Op::ActorSendMove { owner: 1 },
+    ] {
+        fail(
+            vec![
+                init(),
+                Op::ActorSendPrepare {
+                    owner: 1,
+                    ticket: 9,
+                },
+                blocked,
+                Op::ActorSendAbort { ticket: 9 },
+                Op::Return,
+            ],
+            "E_ACTOR_SEND_PENDING",
+        );
     }
 }
 #[test]
 fn pool_lease_cannot_prepare_transfer_with_outstanding_loan() {
-    fail(vec![
-        init(),
-        Op::Borrow { owner: 1, loan: 7, kind: BorrowKind::Shared },
-        Op::ActorSendPrepare { owner: 1, ticket: 9 },
-        Op::Return,
-    ], "E_BORROW_CONFLICT");
+    fail(
+        vec![
+            init(),
+            Op::Borrow {
+                owner: 1,
+                loan: 7,
+                kind: BorrowKind::Shared,
+            },
+            Op::ActorSendPrepare {
+                owner: 1,
+                ticket: 9,
+            },
+            Op::Return,
+        ],
+        "E_BORROW_CONFLICT",
+    );
 }
 #[test]
 fn pool_lease_commit_consumes_sender_ownership() {
     assert!(run(vec![
         init(),
-        Op::ActorSendPrepare { owner: 1, ticket: 9 },
+        Op::ActorSendPrepare {
+            owner: 1,
+            ticket: 9
+        },
         Op::ActorSendCommit { ticket: 9 },
         Op::Return,
-    ]).unwrap().cleanup_by_exit[&0].is_empty());
-    fail(vec![
-        init(),
-        Op::ActorSendPrepare { owner: 1, ticket: 9 },
-        Op::ActorSendCommit { ticket: 9 },
-        Op::Drop { owner: 1 },
-        Op::Return,
-    ], "E_USE_AFTER_MOVE_OR_DROP");
+    ])
+    .unwrap()
+    .cleanup_by_exit[&0]
+        .is_empty());
+    fail(
+        vec![
+            init(),
+            Op::ActorSendPrepare {
+                owner: 1,
+                ticket: 9,
+            },
+            Op::ActorSendCommit { ticket: 9 },
+            Op::Drop { owner: 1 },
+            Op::Return,
+        ],
+        "E_USE_AFTER_MOVE_OR_DROP",
+    );
 }
 #[test]
 fn pool_lease_abort_restores_exact_sender_owner() {
     let proof = run(vec![
         init(),
-        Op::ActorSendPrepare { owner: 1, ticket: 9 },
+        Op::ActorSendPrepare {
+            owner: 1,
+            ticket: 9,
+        },
         Op::ActorSendAbort { ticket: 9 },
         Op::Write { owner: 1 },
         Op::Return,
-    ]).unwrap();
+    ])
+    .unwrap();
     assert_eq!(proof.cleanup_by_exit[&0], vec![1]);
     assert!(run(vec![
         init(),
-        Op::ActorSendPrepare { owner: 1, ticket: 9 },
+        Op::ActorSendPrepare {
+            owner: 1,
+            ticket: 9
+        },
         Op::ActorSendAbort { ticket: 9 },
         Op::Drop { owner: 1 },
         Op::Return,
-    ]).unwrap().cleanup_by_exit[&0].is_empty());
+    ])
+    .unwrap()
+    .cleanup_by_exit[&0]
+        .is_empty());
 }
 #[test]
 fn pool_lease_rejects_double_settlement() {
-    fail(vec![
-        init(),
-        Op::ActorSendPrepare { owner: 1, ticket: 9 },
-        Op::ActorSendAbort { ticket: 9 },
-        Op::ActorSendAbort { ticket: 9 },
-        Op::Return,
-    ], "E_UNKNOWN_ACTOR_SEND_TICKET");
+    fail(
+        vec![
+            init(),
+            Op::ActorSendPrepare {
+                owner: 1,
+                ticket: 9,
+            },
+            Op::ActorSendAbort { ticket: 9 },
+            Op::ActorSendAbort { ticket: 9 },
+            Op::Return,
+        ],
+        "E_UNKNOWN_ACTOR_SEND_TICKET",
+    );
 }
-
 
 #[test]
 fn pool_lease_non_send_payload_cannot_enter_mailbox_escrow() {
-    fail(vec![
-        Op::Init {
-            owner: 1,
-            traits: Traits { is_copy: false, is_send: false },
-        },
-        Op::ActorSendPrepare { owner: 1, ticket: 17 },
-        Op::Return,
-    ], "E_ACTOR_SEND_PROOF_REQUIRED");
+    fail(
+        vec![
+            Op::Init {
+                owner: 1,
+                traits: Traits {
+                    is_copy: false,
+                    is_send: false,
+                },
+            },
+            Op::ActorSendPrepare {
+                owner: 1,
+                ticket: 17,
+            },
+            Op::Return,
+        ],
+        "E_ACTOR_SEND_PROOF_REQUIRED",
+    );
 }
 
 #[test]
 fn pool_lease_copy_send_does_not_bypass_unique_ownership() {
-    fail(vec![
-        init(),
-        Op::ActorSendCopy { owner: 1 },
-        Op::Return,
-    ], "E_ACTOR_COPY_SEND_PROOF_REQUIRED");
+    fail(
+        vec![init(), Op::ActorSendCopy { owner: 1 }, Op::Return],
+        "E_ACTOR_COPY_SEND_PROOF_REQUIRED",
+    );
 }
 
 #[test]
@@ -128,14 +207,23 @@ fn pool_lease_escrow_blocks_task_capture_and_second_send() {
     for blocked in [
         Op::TaskCaptureMove { owner: 1 },
         Op::TaskCaptureCopy { owner: 1 },
-        Op::ActorSendPrepare { owner: 1, ticket: 18 },
+        Op::ActorSendPrepare {
+            owner: 1,
+            ticket: 18,
+        },
     ] {
-        fail(vec![
-            init(),
-            Op::ActorSendPrepare { owner: 1, ticket: 17 },
-            blocked,
-            Op::Return,
-        ], "E_ACTOR_SEND_PENDING");
+        fail(
+            vec![
+                init(),
+                Op::ActorSendPrepare {
+                    owner: 1,
+                    ticket: 17,
+                },
+                blocked,
+                Op::Return,
+            ],
+            "E_ACTOR_SEND_PENDING",
+        );
     }
 }
 
@@ -145,22 +233,39 @@ fn pool_lease_committed_ticket_cannot_abort_or_commit_again() {
         Op::ActorSendAbort { ticket: 17 },
         Op::ActorSendCommit { ticket: 17 },
     ] {
-        fail(vec![
-            init(),
-            Op::ActorSendPrepare { owner: 1, ticket: 17 },
-            Op::ActorSendCommit { ticket: 17 },
-            terminal,
-            Op::Return,
-        ], "E_UNKNOWN_ACTOR_SEND_TICKET");
+        fail(
+            vec![
+                init(),
+                Op::ActorSendPrepare {
+                    owner: 1,
+                    ticket: 17,
+                },
+                Op::ActorSendCommit { ticket: 17 },
+                terminal,
+                Op::Return,
+            ],
+            "E_UNKNOWN_ACTOR_SEND_TICKET",
+        );
     }
 }
 
 #[test]
 fn pool_lease_live_shared_loan_prevents_mutable_alias() {
-    fail(vec![
-        init(),
-        Op::Borrow { owner: 1, loan: 4, kind: BorrowKind::Shared },
-        Op::Borrow { owner: 1, loan: 5, kind: BorrowKind::Mutable },
-        Op::Return,
-    ], "E_BORROW_CONFLICT");
+    fail(
+        vec![
+            init(),
+            Op::Borrow {
+                owner: 1,
+                loan: 4,
+                kind: BorrowKind::Shared,
+            },
+            Op::Borrow {
+                owner: 1,
+                loan: 5,
+                kind: BorrowKind::Mutable,
+            },
+            Op::Return,
+        ],
+        "E_BORROW_CONFLICT",
+    );
 }
