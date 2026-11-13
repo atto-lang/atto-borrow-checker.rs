@@ -99,6 +99,11 @@ impl ActorStackArena {
             .try_reserve_exact(byte_limit as usize)
             .map_err(|_| StackError::Exhausted)?;
         bytes.resize(byte_limit as usize, 0);
+        // No dynamic metadata allocations when an actor pushes a live frame.
+        let mut frames = Vec::new();
+        frames
+            .try_reserve_exact(frame_limit)
+            .map_err(|_| StackError::Exhausted)?;
         Ok(Self {
             actor,
             generation,
@@ -106,7 +111,7 @@ impl ActorStackArena {
             used: 1,
             frame_limit,
             next_serial: 1,
-            frames: Vec::new(),
+            frames,
             faulted: false,
             retired: false,
         })
