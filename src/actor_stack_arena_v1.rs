@@ -7,10 +7,14 @@
 //! runtime adapters must independently authenticate actor/generation/frame.
 
 use std::ops::Range;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 pub const MAX_STACK_BYTES: u32 = 64 * 1024;
 pub const MAX_STACK_FRAMES: usize = 64;
 const MAX_ALIGNMENT: u32 = 4096;
+// Unique across every arena constructed within this process. A durable
+// supervisor epoch is still required across runtime restarts.
+static NEXT_ARENA_INSTANCE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StackError {
@@ -27,6 +31,7 @@ pub enum StackError {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrameRef32 {
+    instance: u64,
     actor: u64,
     generation: u64,
     serial: u64,
@@ -61,8 +66,8 @@ struct LiveFrame {
 /// Every read/write requires exclusive trusted-host access to this arena.
 /// Returning an owned result from the closure cannot export a safe Rust
 /// reference to the frame. FFI and guest codegen require separate proofs.
-#[derive(Debug)]
 pub struct ActorStackArena {
+    instance: u64,
     actor: u64,
     generation: u64,
     bytes: Box<[u8]>,
@@ -72,6 +77,19 @@ pub struct ActorStackArena {
     frames: Vec<LiveFrame>,
     faulted: bool,
     retired: bool,
+}
+
+impl std::fmt::Debug for ActorStackArena {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ActorStackArena")
+            .field("actor", &self.actor)
+            .field("generation", &self.generation)
+            .field("capacity_bytes", &self.bytes.len())
+            .field("active_frames", &self.frames.len())
+            .field("faulted", &self.faulted)
+            .field("retired", &self.retired)
+            .finish_non_exhaustive()
+    }
 }
 
 impl ActorStackArena {
@@ -104,7 +122,11 @@ impl ActorStackArena {
         frames
             .try_reserve_exact(frame_limit)
             .map_err(|_| StackError::Exhausted)?;
+        let instance = NEXT_ARENA_INSTANCE
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+            .map_err(|_| StackError::Exhausted)?;
         Ok(Self {
+            instance,
             actor,
             generation,
             bytes: bytes.into_boxed_slice(),
@@ -160,6 +182,7 @@ impl ActorStackArena {
             return Err(StackError::Exhausted);
         };
         let handle = FrameRef32 {
+            instance: self.instance,
             actor: self.actor,
             generation: self.generation,
             serial: self.next_serial,
@@ -177,6 +200,9 @@ impl ActorStackArena {
 
     fn authenticated_range(&self, handle: FrameRef32) -> Result<Range<usize>, StackError> {
         self.check_live()?;
+        if handle.instance != self.instance {
+            return Err(StackError::UnknownFrame);
+        }
         if handle.actor != self.actor {
             return Err(StackError::ForeignActor);
         }
