@@ -134,9 +134,15 @@ fn hostile_tiny_allocations_hit_a_bounded_fallible_metadata_budget() {
         last = Some(arena.allocate(1, 1).unwrap());
     }
     let last = last.unwrap();
-    assert_eq!(arena.checked_offset(last, 99, 8, 0, 1, 1), Ok(last.offset()));
+    assert_eq!(
+        arena.checked_offset(last, 99, 8, 0, 1, 1),
+        Ok(last.offset())
+    );
     assert_eq!(arena.allocate(1, 1), Err(Ref32Error::MetadataExhausted));
     // Repeated failures must not advance cursor, mutate or reissue references.
     assert_eq!(arena.allocate(1, 1), Err(Ref32Error::MetadataExhausted));
-    assert_eq!(arena.checked_offset(last, 99, 8, 0, 1, 1), Ok(last.offset()));
+    assert_eq!(
+        arena.checked_offset(last, 99, 8, 0, 1, 1),
+        Ok(last.offset())
+    );
 }
