@@ -168,3 +168,38 @@ fn invalid_id_and_epoch_never_grant_permission() {
     assert_eq!(q.active_count(), 0);
     assert_eq!(q.waiting_count(), 0);
 }
+
+#[test]
+fn a_permit_cannot_cross_identical_actor_ticket_and_generation_regions() {
+    // Both regions intentionally issue the same ticket, actor and mode.
+    // A foreign permit must never authorize an otherwise identical region.
+    let mut left = GuardQueue::new(42).unwrap();
+    let mut right = GuardQueue::new(42).unwrap();
+    assert_eq!(left.request(7, 42, Mode::Write), Ok(1));
+    assert_eq!(right.request(7, 42, Mode::Write), Ok(1));
+    let left_permit = left.admit_ready().pop().unwrap();
+    let right_permit = right.admit_ready().pop().unwrap();
+    assert_eq!(
+        right.access(&left_permit, 7, true),
+        Err(GuardError::WrongRegion)
+    );
+    assert_eq!(right.release(&left_permit, 7), Err(GuardError::WrongRegion));
+    assert_eq!(
+        left.access(&right_permit, 7, true),
+        Err(GuardError::WrongRegion)
+    );
+    assert_eq!(right.access(&right_permit, 7, true), Ok(()));
+    assert_eq!(right.active_count(), 1);
+    right.retire(43).unwrap();
+    assert_eq!(
+        right.complete_physical_quiescence(&left_permit, 7),
+        Err(GuardError::WrongRegion)
+    );
+    assert_eq!(right.active_count(), 1);
+    right
+        .complete_physical_quiescence(&right_permit, 7)
+        .unwrap();
+    assert!(right.may_reclaim());
+    assert_eq!(left.access(&left_permit, 7, true), Ok(()));
+    left.release(&left_permit, 7).unwrap();
+}
