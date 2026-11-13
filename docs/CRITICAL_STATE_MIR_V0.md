@@ -11,6 +11,13 @@ frontend, runtime lock, `ref32` actor heap, actor stack, mailbox or guest code.
 - `CriticalReadEnter` admits only `CriticalReadAccess` for that same state/scope.
   `CriticalWriteEnter` admits reads and writes for that state/scope.
   `CriticalExit` consumes the lexical scope exactly once.
+- `CriticalCopyI64 { state, scope, into }` records only a compiler-proven
+  detached `i64` state value, never a pointer or borrowed view. It creates a
+  fresh local SSA owner within the scope. A nonparking mailbox send of this
+  independent value is permitted only **after** `CriticalExit`. A compiler
+  admitting inline `self.send(s.field)` must lower that expression into copy,
+  close scope, then send; it must NOT issue a mailbox call with the loan live.
+  The Rust event does not itself read runtime state or authenticate source types.
 - This deliberately restrictive V0 admits **one active lexical critical scope
   per path**. Nested/reentrant callbacks, including nested readers, fail closed
   until a separate proven reentrancy/ordering policy exists. This does **not**
