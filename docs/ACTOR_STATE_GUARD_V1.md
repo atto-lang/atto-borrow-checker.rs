@@ -22,8 +22,13 @@ region capability cryptographically or through unforgeable handles.
   out of band after \`admit_ready\`.
 - The queue rejects reentrant state guards for the same actor and caps
   outstanding queued + admitted permits at 1024 per region.
-- \`access\` validates holder, generation, active permit and exclusive write.
-  A permit never returns a memory address or a Rust reference to actor state.
+- \`access\` validates holder, generation, **queue-specific nonwrapping region
+  identity**, active permit and exclusive write. A permit from a second queue
+  must fail even if ticket number, actor, generation and mode all match. A
+  permit never returns a memory address or a Rust reference to actor state.
+- Pending tickets remain numeric and local to their queue; only the trusted
+  per-region runtime may call \`cancel_pending\`. They are not cross-region
+  capabilities or authenticated actor handles.
 - \`cancel_pending\` removes only unadmitted requests; cancellation of active
   code requires an actual guest quiescence protocol.
 
