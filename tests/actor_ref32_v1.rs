@@ -420,22 +420,55 @@ fn recycled_allocation_slot_rejects_stale_reference_and_loan() {
     // Same arena, actor generation and allocation ID; only the slot epoch changes.
     allocation.allocation_generation = 6;
     assert_eq!(
-        check_access(&arena, &allocation, &reference, &loan, 8, 8, AccessMode::Read),
+        check_access(
+            &arena,
+            &allocation,
+            &reference,
+            &loan,
+            8,
+            8,
+            AccessMode::Read
+        ),
         Err(Ref32Error::StaleAllocation)
     );
     // A refreshed ref still cannot reuse the stale physical loan.
     reference.allocation_generation = 6;
     assert_eq!(
-        check_access(&arena, &allocation, &reference, &loan, 8, 8, AccessMode::Read),
+        check_access(
+            &arena,
+            &allocation,
+            &reference,
+            &loan,
+            8,
+            8,
+            AccessMode::Read
+        ),
         Err(Ref32Error::StaleAllocation)
     );
     // New allocation + ref + trusted fresh loan metadata passes preflight.
     loan.allocation_generation = 6;
-    assert!(check_access(&arena, &allocation, &reference, &loan, 8, 8, AccessMode::Read).is_ok());
+    assert!(check_access(
+        &arena,
+        &allocation,
+        &reference,
+        &loan,
+        8,
+        8,
+        AccessMode::Read
+    )
+    .is_ok());
     // Previous ref cannot be resurrected with a new loan.
     reference.allocation_generation = 5;
     assert_eq!(
-        check_access(&arena, &allocation, &reference, &loan, 8, 8, AccessMode::Write),
+        check_access(
+            &arena,
+            &allocation,
+            &reference,
+            &loan,
+            8,
+            8,
+            AccessMode::Write
+        ),
         Err(Ref32Error::StaleAllocation)
     );
 }
@@ -447,7 +480,15 @@ fn zero_allocation_epoch_is_never_valid_metadata() {
     reference.allocation_generation = 0;
     loan.allocation_generation = 0;
     assert_eq!(
-        check_access(&arena, &allocation, &reference, &loan, 8, 8, AccessMode::Read),
+        check_access(
+            &arena,
+            &allocation,
+            &reference,
+            &loan,
+            8,
+            8,
+            AccessMode::Read
+        ),
         Err(Ref32Error::StaleAllocation)
     );
 }

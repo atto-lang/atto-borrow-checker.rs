@@ -30,14 +30,37 @@ pub struct CriticalRef32Site<'a> {
 pub enum CriticalRef32Error {
     Lexical(Diagnostic),
     SiteBudget,
-    DuplicateSite { block: BlockId, operation: usize },
-    MissingSite { block: BlockId, operation: usize },
-    UnexpectedSite { block: BlockId, operation: usize },
-    StateMismatch { block: BlockId, operation: usize },
-    AllocationBindingMismatch { block: BlockId, operation: usize },
+    DuplicateSite {
+        block: BlockId,
+        operation: usize,
+    },
+    MissingSite {
+        block: BlockId,
+        operation: usize,
+    },
+    UnexpectedSite {
+        block: BlockId,
+        operation: usize,
+    },
+    StateMismatch {
+        block: BlockId,
+        operation: usize,
+    },
+    AllocationBindingMismatch {
+        block: BlockId,
+        operation: usize,
+    },
     /// A detached i64 snapshot must read all eight bytes, never a prefix.
-    InvalidScalarWidth { block: BlockId, operation: usize, bytes: u32 },
-    Ref32 { block: BlockId, operation: usize, reason: Ref32Error },
+    InvalidScalarWidth {
+        block: BlockId,
+        operation: usize,
+        bytes: u32,
+    },
+    Ref32 {
+        block: BlockId,
+        operation: usize,
+        reason: Ref32Error,
+    },
 }
 
 /// Enforce a one-to-one inventory of all typed critical reads, writes and
@@ -64,39 +87,51 @@ pub fn verify_critical_ref32_sites(
         for (index, op) in block.operations.iter().enumerate() {
             let (state, scope, mode) = match op {
                 Op::CriticalReadAccess { state, scope }
-                | Op::CriticalCopyI64 { state, scope, .. } => {
-                    (*state, *scope, AccessMode::Read)
-                }
-                Op::CriticalWriteAccess { state, scope } => {
-                    (*state, *scope, AccessMode::Write)
-                }
+                | Op::CriticalCopyI64 { state, scope, .. } => (*state, *scope, AccessMode::Read),
+                Op::CriticalWriteAccess { state, scope } => (*state, *scope, AccessMode::Write),
                 _ => continue,
             };
-            let site = pending.remove(&(block.id, index)).ok_or(
-                CriticalRef32Error::MissingSite { block: block.id, operation: index },
-            )?;
+            let site =
+                pending
+                    .remove(&(block.id, index))
+                    .ok_or(CriticalRef32Error::MissingSite {
+                        block: block.id,
+                        operation: index,
+                    })?;
             if site.state != state || site.scope != scope {
                 return Err(CriticalRef32Error::StateMismatch {
-                    block: block.id, operation: index,
+                    block: block.id,
+                    operation: index,
                 });
             }
             if site.state_allocation_id == 0
                 || site.state_allocation_id != site.allocation.allocation_id
             {
                 return Err(CriticalRef32Error::AllocationBindingMismatch {
-                    block: block.id, operation: index,
+                    block: block.id,
+                    operation: index,
                 });
             }
             if matches!(op, Op::CriticalCopyI64 { .. }) && site.access_bytes != 8 {
                 return Err(CriticalRef32Error::InvalidScalarWidth {
-                    block: block.id, operation: index, bytes: site.access_bytes,
+                    block: block.id,
+                    operation: index,
+                    bytes: site.access_bytes,
                 });
             }
             check_access(
-                site.arena, site.allocation, site.reference, site.loan,
-                site.access_bytes, site.alignment, mode,
-            ).map_err(|reason| CriticalRef32Error::Ref32 {
-                block: block.id, operation: index, reason,
+                site.arena,
+                site.allocation,
+                site.reference,
+                site.loan,
+                site.access_bytes,
+                site.alignment,
+                mode,
+            )
+            .map_err(|reason| CriticalRef32Error::Ref32 {
+                block: block.id,
+                operation: index,
+                reason,
             })?;
         }
     }

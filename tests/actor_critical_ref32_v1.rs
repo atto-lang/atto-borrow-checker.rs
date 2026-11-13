@@ -14,12 +14,28 @@ fn program() -> Program {
             id: 1,
             successors: vec![],
             operations: vec![
-                Op::CriticalReadEnter { state: 7, scope: 10 },
-                Op::CriticalReadAccess { state: 7, scope: 10 },
-                Op::CriticalCopyI64 { state: 7, scope: 10, into: 42 },
+                Op::CriticalReadEnter {
+                    state: 7,
+                    scope: 10,
+                },
+                Op::CriticalReadAccess {
+                    state: 7,
+                    scope: 10,
+                },
+                Op::CriticalCopyI64 {
+                    state: 7,
+                    scope: 10,
+                    into: 42,
+                },
                 Op::CriticalExit { scope: 10 },
-                Op::CriticalWriteEnter { state: 7, scope: 11 },
-                Op::CriticalWriteAccess { state: 7, scope: 11 },
+                Op::CriticalWriteEnter {
+                    state: 7,
+                    scope: 11,
+                },
+                Op::CriticalWriteAccess {
+                    state: 7,
+                    scope: 11,
+                },
                 Op::CriticalExit { scope: 11 },
                 Op::ActorSendCopy { owner: 42 },
                 Op::Return,
@@ -29,37 +45,75 @@ fn program() -> Program {
 }
 fn fixture() -> (ActorArena, Allocation, Ref32, Loan, Loan) {
     let arena = ActorArena {
-        actor_id: 5, arena_id: 3, incarnation: 2, generation: 8,
-        capacity_bytes: 4096, retired: false,
+        actor_id: 5,
+        arena_id: 3,
+        incarnation: 2,
+        generation: 8,
+        capacity_bytes: 4096,
+        retired: false,
     };
     let allocation = Allocation {
-        actor_id: 5, arena_id: 3, incarnation: 2, generation: 8,
-        allocation_id: 99, allocation_generation: 12,
-        base: 64, bytes: 128, retired: false,
+        actor_id: 5,
+        arena_id: 3,
+        incarnation: 2,
+        generation: 8,
+        allocation_id: 99,
+        allocation_generation: 12,
+        base: 64,
+        bytes: 128,
+        retired: false,
     };
     let reference = Ref32 {
-        actor_id: 5, arena_id: 3, incarnation: 2, generation: 8,
-        allocation_id: 99, allocation_generation: 12, offset: 72,
+        actor_id: 5,
+        arena_id: 3,
+        incarnation: 2,
+        generation: 8,
+        allocation_id: 99,
+        allocation_generation: 12,
+        offset: 72,
     };
     let read = Loan {
-        actor_id: 5, arena_id: 3, incarnation: 2, generation: 8,
-        allocation_id: 99, allocation_generation: 12,
-        mode: LoanMode::SharedRead, live: true,
+        actor_id: 5,
+        arena_id: 3,
+        incarnation: 2,
+        generation: 8,
+        allocation_id: 99,
+        allocation_generation: 12,
+        mode: LoanMode::SharedRead,
+        live: true,
     };
     let write = Loan {
-        actor_id: 5, arena_id: 3, incarnation: 2, generation: 8,
-        allocation_id: 99, allocation_generation: 12,
-        mode: LoanMode::ExclusiveWrite, live: true,
+        actor_id: 5,
+        arena_id: 3,
+        incarnation: 2,
+        generation: 8,
+        allocation_id: 99,
+        allocation_generation: 12,
+        mode: LoanMode::ExclusiveWrite,
+        live: true,
     };
     (arena, allocation, reference, read, write)
 }
 fn site<'a>(
-    operation: usize, scope: u32, arena: &'a ActorArena, allocation: &'a Allocation,
-    reference: &'a Ref32, loan: &'a Loan,
+    operation: usize,
+    scope: u32,
+    arena: &'a ActorArena,
+    allocation: &'a Allocation,
+    reference: &'a Ref32,
+    loan: &'a Loan,
 ) -> CriticalRef32Site<'a> {
     CriticalRef32Site {
-        block: 1, operation, state: 7, scope, state_allocation_id: 99,
-        arena, allocation, reference, loan, access_bytes: 8, alignment: 8,
+        block: 1,
+        operation,
+        state: 7,
+        scope,
+        state_allocation_id: 99,
+        arena,
+        allocation,
+        reference,
+        loan,
+        access_bytes: 8,
+        alignment: 8,
     }
 }
 
@@ -83,7 +137,10 @@ fn detached_copy_requires_explicit_load_site() {
     ];
     assert_eq!(
         verify_critical_ref32_sites(&program(), &sites),
-        Err(CriticalRef32Error::MissingSite { block: 1, operation: 2 })
+        Err(CriticalRef32Error::MissingSite {
+            block: 1,
+            operation: 2
+        })
     );
 }
 
@@ -98,7 +155,9 @@ fn write_requires_physical_exclusive_loan_metadata() {
     assert_eq!(
         verify_critical_ref32_sites(&program(), &sites),
         Err(CriticalRef32Error::Ref32 {
-            block: 1, operation: 5, reason: Ref32Error::WriteRequiresExclusive
+            block: 1,
+            operation: 5,
+            reason: Ref32Error::WriteRequiresExclusive
         })
     );
 }
@@ -116,7 +175,9 @@ fn recycled_slot_cannot_use_stale_read_or_write_loans() {
     assert_eq!(
         verify_critical_ref32_sites(&program(), &sites),
         Err(CriticalRef32Error::Ref32 {
-            block: 1, operation: 1, reason: Ref32Error::StaleAllocation
+            block: 1,
+            operation: 1,
+            reason: Ref32Error::StaleAllocation
         })
     );
 }
@@ -125,30 +186,48 @@ fn recycled_slot_cannot_use_stale_read_or_write_loans() {
 fn duplicate_unexpected_and_wrong_state_sites_fail_closed() {
     let (arena, allocation, reference, reader, writer) = fixture();
     assert_eq!(
-        verify_critical_ref32_sites(&program(), &[
-            site(1, 10, &arena, &allocation, &reference, &reader),
-            site(1, 10, &arena, &allocation, &reference, &reader),
-        ]),
-        Err(CriticalRef32Error::DuplicateSite { block: 1, operation: 1 })
+        verify_critical_ref32_sites(
+            &program(),
+            &[
+                site(1, 10, &arena, &allocation, &reference, &reader),
+                site(1, 10, &arena, &allocation, &reference, &reader),
+            ]
+        ),
+        Err(CriticalRef32Error::DuplicateSite {
+            block: 1,
+            operation: 1
+        })
     );
     let mut wrong = site(1, 10, &arena, &allocation, &reference, &reader);
     wrong.scope = 11;
     assert_eq!(
-        verify_critical_ref32_sites(&program(), &[
-            wrong,
-            site(2, 10, &arena, &allocation, &reference, &reader),
-            site(5, 11, &arena, &allocation, &reference, &writer),
-        ]),
-        Err(CriticalRef32Error::StateMismatch { block: 1, operation: 1 })
+        verify_critical_ref32_sites(
+            &program(),
+            &[
+                wrong,
+                site(2, 10, &arena, &allocation, &reference, &reader),
+                site(5, 11, &arena, &allocation, &reference, &writer),
+            ]
+        ),
+        Err(CriticalRef32Error::StateMismatch {
+            block: 1,
+            operation: 1
+        })
     );
     assert_eq!(
-        verify_critical_ref32_sites(&program(), &[
-            site(1, 10, &arena, &allocation, &reference, &reader),
-            site(2, 10, &arena, &allocation, &reference, &reader),
-            site(5, 11, &arena, &allocation, &reference, &writer),
-            site(7, 11, &arena, &allocation, &reference, &writer),
-        ]),
-        Err(CriticalRef32Error::UnexpectedSite { block: 1, operation: 7 })
+        verify_critical_ref32_sites(
+            &program(),
+            &[
+                site(1, 10, &arena, &allocation, &reference, &reader),
+                site(2, 10, &arena, &allocation, &reference, &reader),
+                site(5, 11, &arena, &allocation, &reference, &writer),
+                site(7, 11, &arena, &allocation, &reference, &writer),
+            ]
+        ),
+        Err(CriticalRef32Error::UnexpectedSite {
+            block: 1,
+            operation: 7
+        })
     );
 }
 
@@ -158,12 +237,18 @@ fn wrong_allocation_binding_and_unproved_suspend_are_denied() {
     let mut wrong = site(1, 10, &arena, &allocation, &reference, &reader);
     wrong.state_allocation_id = 100;
     assert_eq!(
-        verify_critical_ref32_sites(&program(), &[
-            wrong,
-            site(2, 10, &arena, &allocation, &reference, &reader),
-            site(5, 11, &arena, &allocation, &reference, &writer),
-        ]),
-        Err(CriticalRef32Error::AllocationBindingMismatch { block: 1, operation: 1 })
+        verify_critical_ref32_sites(
+            &program(),
+            &[
+                wrong,
+                site(2, 10, &arena, &allocation, &reference, &reader),
+                site(5, 11, &arena, &allocation, &reference, &writer),
+            ]
+        ),
+        Err(CriticalRef32Error::AllocationBindingMismatch {
+            block: 1,
+            operation: 1
+        })
     );
     let mut unsafe_program = program();
     unsafe_program.blocks[0].operations.insert(1, Op::Suspend);
@@ -187,7 +272,9 @@ fn detached_i64_snapshot_never_accepts_partial_width() {
         assert_eq!(
             verify_critical_ref32_sites(&program(), &sites),
             Err(CriticalRef32Error::InvalidScalarWidth {
-                block: 1, operation: 2, bytes,
+                block: 1,
+                operation: 2,
+                bytes,
             })
         );
     }
