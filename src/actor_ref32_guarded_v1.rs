@@ -103,6 +103,24 @@ impl GuardedRef32Arena {
         Ok(self.queue.admit_ready())
     }
 
+    /// Cancel a queued admission without blocking a carrier. An already
+    /// admitted loan must instead be physically exited and released; a
+    /// queued cancellation cannot revoke a live permit or bypass FIFO.
+    /// The runtime must authenticate the holder before calling this method.
+    pub fn cancel_pending(
+        &mut self,
+        ticket: u64,
+        trusted_holder: u64,
+        generation: u64,
+    ) -> Result<(), GuardedRef32Error> {
+        if !self.sealed {
+            return Err(GuardedRef32Error::Unsealed);
+        }
+        Ok(self
+            .queue
+            .cancel_pending(ticket, trusted_holder, generation)?)
+    }
+
     /// A successful result is strictly a *logical preflight*: the authenticated
     /// permit must be checked against THIS arena's guard namespace and the
     /// ref32 against THIS arena's allocation table. Runtime physical locks
