@@ -8,6 +8,8 @@ Compiler-local type inference, ownership state changes and CFG construction can 
 
 See [hybrid integration design](docs/HYBRID_COMPILER_INTEGRATION.md).
 
+The Rust V0 checker also has a **proposed** lexical `critical-read`/`critical-write` typed-MIR static gate. It rejects wrong-mode state writes, scope escape, nested access, suspension and actor/task boundary effects, but does not prove any compiler lowering or physical reader/writer lock. See [critical-state MIR V0](docs/CRITICAL_STATE_MIR_V0.md).
+
 ## Current implementation
 
 `src/lib.rs` implements a deterministic, bounded **V0 CFG ownership oracle** with move/copy/drop, shared/exclusive loans, task capture Copy and Send distinctions, conservative suspension and actor-hop fences, branch joins, and exit cleanup-order proposals. It is intentionally not a complete compiler or actor lifetime checker.
