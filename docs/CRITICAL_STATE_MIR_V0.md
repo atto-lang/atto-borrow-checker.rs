@@ -18,6 +18,12 @@ frontend, runtime lock, `ref32` actor heap, actor stack, mailbox or guest code.
 - `Suspend`, generic `Borrow` (whose field provenance is unproved here),
   task captures, actor hops, send prepare/commit/abort, immutable publication
   and guarded promotion fail while a critical callback is active.
+- Entering a critical scope also fails while **any ordinary loan** or **mailbox
+  send escrow** is outstanding. V0 does not authenticate disjointness between
+  an arbitrary ordinary loan and sealed actor state, nor can it establish
+  completed ownership transfer before send commit/abort. Both obligations
+  must settle **before** critical entry. This conservative rule can later be
+  relaxed only through authenticated, compiler-owned nonalias provenance.
 - A `Return` with a live scope, read-only mutation, wrong state/scope, duplicated
   scope definition, unbalanced exit, and incompatible control-flow joins reject.
 - Every operation uses `Effect::CriticalRegion` in typed MIR; wrong effect
