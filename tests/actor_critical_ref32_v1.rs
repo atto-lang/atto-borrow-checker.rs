@@ -172,3 +172,23 @@ fn wrong_allocation_binding_and_unproved_suspend_are_denied() {
         Err(CriticalRef32Error::Lexical(d)) if d.code == "E_CRITICAL_EFFECT_UNPROVEN"
     ));
 }
+
+#[test]
+fn detached_i64_snapshot_never_accepts_partial_width() {
+    let (arena, allocation, reference, reader, writer) = fixture();
+    for bytes in [0, 1, 4, 7, 9, 16] {
+        let mut snapshot = site(2, 10, &arena, &allocation, &reference, &reader);
+        snapshot.access_bytes = bytes;
+        let sites = [
+            site(1, 10, &arena, &allocation, &reference, &reader),
+            snapshot,
+            site(5, 11, &arena, &allocation, &reference, &writer),
+        ];
+        assert_eq!(
+            verify_critical_ref32_sites(&program(), &sites),
+            Err(CriticalRef32Error::InvalidScalarWidth {
+                block: 1, operation: 2, bytes,
+            })
+        );
+    }
+}

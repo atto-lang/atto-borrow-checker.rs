@@ -35,6 +35,8 @@ pub enum CriticalRef32Error {
     UnexpectedSite { block: BlockId, operation: usize },
     StateMismatch { block: BlockId, operation: usize },
     AllocationBindingMismatch { block: BlockId, operation: usize },
+    /// A detached i64 snapshot must read all eight bytes, never a prefix.
+    InvalidScalarWidth { block: BlockId, operation: usize, bytes: u32 },
     Ref32 { block: BlockId, operation: usize, reason: Ref32Error },
 }
 
@@ -83,6 +85,11 @@ pub fn verify_critical_ref32_sites(
             {
                 return Err(CriticalRef32Error::AllocationBindingMismatch {
                     block: block.id, operation: index,
+                });
+            }
+            if matches!(op, Op::CriticalCopyI64 { .. }) && site.access_bytes != 8 {
+                return Err(CriticalRef32Error::InvalidScalarWidth {
+                    block: block.id, operation: index, bytes: site.access_bytes,
                 });
             }
             check_access(
