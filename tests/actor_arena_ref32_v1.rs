@@ -1,5 +1,7 @@
 //! Independent ref32 metadata regressions; not native compiler/guest proof.
-use atto_borrow_checker::actor_arena_ref32_v1::{ActorArenaRef32, Ref32Error, MAX_REF32_CAPACITY};
+use atto_borrow_checker::actor_arena_ref32_v1::{
+    ActorArenaRef32, Ref32Error, MAX_REF32_CAPACITY, MAX_TRACKED_ALLOCATIONS,
+};
 
 #[test]
 fn actor_private_allocations_resolve_only_within_their_extent() {
@@ -121,4 +123,20 @@ fn invalid_initial_state_and_stale_retirement_fail_closed() {
     assert_eq!(arena.retire(0), Err(Ref32Error::StaleGeneration));
     assert_eq!(arena.retire(2), Ok(()));
     assert_eq!(arena.retire(3), Err(Ref32Error::Retired));
+}
+
+#[test]
+fn hostile_tiny_allocations_hit_a_bounded_fallible_metadata_budget() {
+    // Sufficient address space remains after the metadata budget is reached.
+    let mut arena = ActorArenaRef32::new(99, 8, 100_000).unwrap();
+    let mut last = None;
+    for _ in 0..MAX_TRACKED_ALLOCATIONS {
+        last = Some(arena.allocate(1, 1).unwrap());
+    }
+    let last = last.unwrap();
+    assert_eq!(arena.checked_offset(last, 99, 8, 0, 1, 1), Ok(last.offset()));
+    assert_eq!(arena.allocate(1, 1), Err(Ref32Error::MetadataExhausted));
+    // Repeated failures must not advance cursor, mutate or reissue references.
+    assert_eq!(arena.allocate(1, 1), Err(Ref32Error::MetadataExhausted));
+    assert_eq!(arena.checked_offset(last, 99, 8, 0, 1, 1), Ok(last.offset()));
 }
