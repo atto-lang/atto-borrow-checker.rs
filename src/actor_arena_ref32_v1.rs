@@ -120,7 +120,10 @@ impl ActorArenaRef32 {
         check_alignment(alignment)?;
         let align = u64::from(alignment);
         let pad = (align - self.next_offset % align) % align;
-        let start = self.next_offset.checked_add(pad).ok_or(Ref32Error::Exhausted)?;
+        let start = self
+            .next_offset
+            .checked_add(pad)
+            .ok_or(Ref32Error::Exhausted)?;
         let end = start
             .checked_add(u64::from(size))
             .ok_or(Ref32Error::Exhausted)?;
@@ -135,7 +138,13 @@ impl ActorArenaRef32 {
             .ok_or(Ref32Error::AllocationIdExhausted)?;
         let offset = u32::try_from(start).map_err(|_| Ref32Error::Exhausted)?;
         let allocation_id = self.next_allocation_id;
-        self.allocations.insert(offset, Allocation { size, id: allocation_id });
+        self.allocations.insert(
+            offset,
+            Allocation {
+                size,
+                id: allocation_id,
+            },
+        );
         self.next_offset = end;
         self.next_allocation_id = next_id;
         Ok(Ref32 {
@@ -168,9 +177,7 @@ impl ActorArenaRef32 {
         if requesting_actor != self.actor_id || reference.actor_id != self.actor_id {
             return Err(Ref32Error::WrongActor);
         }
-        if expected_generation != self.generation
-            || reference.arena_generation != self.generation
-        {
+        if expected_generation != self.generation || reference.arena_generation != self.generation {
             return Err(Ref32Error::StaleGeneration);
         }
         if reference.arena_id != self.arena_id {
