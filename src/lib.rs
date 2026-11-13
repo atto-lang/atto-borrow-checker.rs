@@ -14,6 +14,10 @@ pub type BlockId = u32;
 pub type SharedRegionId = u32;
 /// Compiler-local identity of one in-flight mailbox handoff, not a runtime grant.
 pub type SendTicketId = u32;
+/// Compiler-derived sealed actor-state identity; not a runtime access capability.
+pub type ActorStateId = u32;
+/// Lexical critical callback identity, unique per typed function.
+pub type CriticalScopeId = u32;
 
 const MAX_OWNERS: usize = 64;
 const MAX_LOANS: usize = 1024;
@@ -121,6 +125,12 @@ pub enum Op {
         owner: OwnerId,
         region: SharedRegionId,
     },
+    /// Static lexical events, never physical reader/writer lock grants.
+    CriticalReadEnter { state: ActorStateId, scope: CriticalScopeId },
+    CriticalWriteEnter { state: ActorStateId, scope: CriticalScopeId },
+    CriticalReadAccess { state: ActorStateId, scope: CriticalScopeId },
+    CriticalWriteAccess { state: ActorStateId, scope: CriticalScopeId },
+    CriticalExit { scope: CriticalScopeId },
     Return,
 }
 
@@ -196,6 +206,11 @@ fn shadow_kind(op: &Op) -> (&'static str, Option<OwnerId>) {
         Op::ActorSendCopy { owner } => ("ACTOR_SEND_COPY", Some(owner)),
         Op::PublishFrozen { owner, .. } => ("PUBLISH_FROZEN", Some(owner)),
         Op::PromoteGuarded { owner, .. } => ("PROMOTE_GUARDED", Some(owner)),
+        Op::CriticalReadEnter { .. } => ("CRITICAL_READ_ENTER", None),
+        Op::CriticalWriteEnter { .. } => ("CRITICAL_WRITE_ENTER", None),
+        Op::CriticalReadAccess { .. } => ("CRITICAL_READ_ACCESS", None),
+        Op::CriticalWriteAccess { .. } => ("CRITICAL_WRITE_ACCESS", None),
+        Op::CriticalExit { .. } => ("CRITICAL_EXIT", None),
         Op::Return => ("RETURN", None),
     }
 }
@@ -217,6 +232,15 @@ struct Loan {
     kind: BorrowKind,
 }
 
+// Conservative single-scope V0: the actual multi-reader arbitration and
+// physical quiescence must be implemented in the trusted actor runtime.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CriticalScope {
+    state: ActorStateId,
+    id: CriticalScopeId,
+    kind: BorrowKind,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct State {
     live: BTreeMap<OwnerId, Owner>,
@@ -224,6 +248,7 @@ struct State {
     loans: BTreeMap<LoanId, Loan>,
     /// An in-flight send reserves its original semantic owner; no use until settled.
     pending_sends: BTreeMap<SendTicketId, OwnerId>,
+    critical_scope: Option<CriticalScope>,
     ever_loaned: BTreeSet<LoanId>,
     next_acquisition: u64,
 }
@@ -278,7 +303,64 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
             return Err(bad("E_ACTOR_SEND_PENDING"));
         }
     }
+    // Any potential suspension, cross-actor boundary or task capture inside
+    // a critical callback is unproved. An adapter must also reject unknown
+    // call, FFI and I/O effects; this CFG cannot attest their absence.
+    if state.critical_scope.is_some()
+        && matches!(
+            op,
+            Op::Suspend
+                | Op::Borrow { .. }
+                | Op::ActorHopBorrow { .. }
+                | Op::ActorSendPrepare { .. }
+                | Op::ActorSendCommit { .. }
+                | Op::ActorSendAbort { .. }
+                | Op::ActorSendMove { .. }
+                | Op::ActorSendCopy { .. }
+                | Op::TaskCaptureCopy { .. }
+                | Op::TaskCaptureMove { .. }
+                | Op::PublishFrozen { .. }
+                | Op::PromoteGuarded { .. }
+        )
+    {
+        return Err(bad("E_CRITICAL_EFFECT_UNPROVEN"));
+    }
     match *op {
+        Op::CriticalReadEnter { state: id, scope }
+        | Op::CriticalWriteEnter { state: id, scope } => {
+            if state.critical_scope.is_some() {
+                return Err(bad("E_CRITICAL_REENTRANT"));
+            }
+            let kind = if matches!(op, Op::CriticalWriteEnter { .. }) {
+                BorrowKind::Mutable
+            } else {
+                BorrowKind::Shared
+            };
+            state.critical_scope = Some(CriticalScope {
+                state: id,
+                id: scope,
+                kind,
+            });
+        }
+        Op::CriticalReadAccess { state: id, scope } => {
+            if !matches!(&state.critical_scope, Some(active) if active.state == id && active.id == scope) {
+                return Err(bad("E_CRITICAL_SCOPE_REQUIRED"));
+            }
+        }
+        Op::CriticalWriteAccess { state: id, scope } => {
+            if !matches!(&state.critical_scope, Some(active) if active.state == id && active.id == scope) {
+                return Err(bad("E_CRITICAL_SCOPE_REQUIRED"));
+            }
+            if !matches!(&state.critical_scope, Some(active) if active.kind == BorrowKind::Mutable) {
+                return Err(bad("E_CRITICAL_WRITE_REQUIRED"));
+            }
+        }
+        Op::CriticalExit { scope } => {
+            if !matches!(&state.critical_scope, Some(active) if active.id == scope) {
+                return Err(bad("E_CRITICAL_SCOPE_REQUIRED"));
+            }
+            state.critical_scope = None;
+        }
         Op::Init { owner, traits } => {
             if !fresh_destination(state, owner) {
                 return Err(bad("E_OWNER_ID_REUSED_OR_BUDGET"));
@@ -505,6 +587,9 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
             state.live.remove(&owner);
         }
         Op::Return => {
+            if state.critical_scope.is_some() {
+                return Err(bad("E_CRITICAL_SCOPE_ESCAPE"));
+            }
             if !state.pending_sends.is_empty() {
                 return Err(bad("E_ACTOR_SEND_UNRESOLVED"));
             }
@@ -585,6 +670,7 @@ fn verify_internal(
     let mut loan_definitions = BTreeSet::new();
     let mut shared_region_definitions = BTreeSet::new();
     let mut send_ticket_definitions = BTreeSet::new();
+    let mut critical_scope_definitions = BTreeSet::new();
     for block in blocks.values() {
         for (index, op) in block.operations.iter().enumerate() {
             let owner = match op {
@@ -623,6 +709,22 @@ fn verify_internal(
                 }
                 if send_ticket_definitions.len() > MAX_OWNERS {
                     return Err(Diagnostic::at("E_SEND_TICKET_BUDGET", block.id, index));
+                }
+            }
+            if let Op::CriticalReadEnter { state, scope }
+            | Op::CriticalWriteEnter { state, scope } = op
+            {
+                if *state == 0 {
+                    return Err(Diagnostic::at("E_CRITICAL_STATE_ID_ZERO", block.id, index));
+                }
+                if *scope == 0 {
+                    return Err(Diagnostic::at("E_CRITICAL_SCOPE_ID_ZERO", block.id, index));
+                }
+                if !critical_scope_definitions.insert(*scope) {
+                    return Err(Diagnostic::at("E_CRITICAL_SCOPE_DEF_REUSED", block.id, index));
+                }
+                if critical_scope_definitions.len() > MAX_LOANS {
+                    return Err(Diagnostic::at("E_CRITICAL_SCOPE_BUDGET", block.id, index));
                 }
             }
             let region = match op {
