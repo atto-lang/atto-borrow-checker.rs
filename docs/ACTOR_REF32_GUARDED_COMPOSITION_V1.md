@@ -63,7 +63,7 @@ cargo test --all-targets --locked
 cargo test --all-targets --locked --release
 ```
 
-The five new `tests/actor_ref32_guarded_v1.rs` cases are model-level tests.
+The seven new `tests/actor_ref32_guarded_v1.rs` cases are model-level tests.
 Do not claim they passed until the real Rust toolchain executes them.
 
 The next backend gate is one unchanged `.atto` fixture with detached
