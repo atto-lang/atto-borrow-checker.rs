@@ -162,3 +162,39 @@ fn alignment_over_budget_poisoning_is_atomic_and_actor_local() {
     actor.retire(3).unwrap();
     assert_eq!(actor.active_frames(), 0);
 }
+
+#[test]
+fn same_actor_and_generation_cannot_reuse_stale_handle_from_old_instance() {
+    // A supervisor must still authenticate the durable actor generation, but
+    // duplicate local arena construction cannot revive an old frame handle.
+    let mut old = ActorStackArena::with_limits(51, 7, 64, 4).unwrap();
+    let mut duplicate = ActorStackArena::with_limits(51, 7, 64, 4).unwrap();
+    let old_frame = old.push(12, 4).unwrap();
+    let new_frame = duplicate.push(12, 4).unwrap();
+    assert_eq!(old_frame.offset(), new_frame.offset());
+    assert_ne!(old_frame, new_frame);
+    assert_eq!(
+        duplicate.with_read(old_frame, |bytes| bytes.len()),
+        Err(StackError::UnknownFrame)
+    );
+    assert_eq!(
+        old.with_write(new_frame, |bytes| bytes.fill(0)),
+        Err(StackError::UnknownFrame)
+    );
+    assert_eq!(duplicate.with_read(new_frame, |bytes| bytes.len()), Ok(12));
+}
+
+#[test]
+fn debug_output_never_exposes_actor_stack_contents() {
+    let mut arena = ActorStackArena::with_limits(8, 3, 96, 4).unwrap();
+    let frame = arena.push(16, 1).unwrap();
+    arena
+        .with_write(frame, |bytes| bytes.copy_from_slice(b"SECRET_FRAME_123"))
+        .unwrap();
+    let printed = format!("{arena:?}");
+    assert!(printed.contains("ActorStackArena"));
+    assert!(!printed.contains("SECRET_FRAME_123"));
+    // No backing storage vector, byte array or internal handles are emitted.
+    assert!(!printed.contains("bytes:"));
+    assert!(!printed.contains("frames: ["));
+}
