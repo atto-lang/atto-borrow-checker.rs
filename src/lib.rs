@@ -126,14 +126,32 @@ pub enum Op {
         region: SharedRegionId,
     },
     /// Static lexical events, never physical reader/writer lock grants.
-    CriticalReadEnter { state: ActorStateId, scope: CriticalScopeId },
-    CriticalWriteEnter { state: ActorStateId, scope: CriticalScopeId },
-    CriticalReadAccess { state: ActorStateId, scope: CriticalScopeId },
-    CriticalWriteAccess { state: ActorStateId, scope: CriticalScopeId },
+    CriticalReadEnter {
+        state: ActorStateId,
+        scope: CriticalScopeId,
+    },
+    CriticalWriteEnter {
+        state: ActorStateId,
+        scope: CriticalScopeId,
+    },
+    CriticalReadAccess {
+        state: ActorStateId,
+        scope: CriticalScopeId,
+    },
+    CriticalWriteAccess {
+        state: ActorStateId,
+        scope: CriticalScopeId,
+    },
     /// A compiler-proven i64 copied into a fresh local SSA owner while guarded.
     /// Mailbox delivery of the detached copy must occur after CriticalExit.
-    CriticalCopyI64 { state: ActorStateId, scope: CriticalScopeId, into: OwnerId },
-    CriticalExit { scope: CriticalScopeId },
+    CriticalCopyI64 {
+        state: ActorStateId,
+        scope: CriticalScopeId,
+        into: OwnerId,
+    },
+    CriticalExit {
+        scope: CriticalScopeId,
+    },
     Return,
 }
 
@@ -358,20 +376,28 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
             });
         }
         Op::CriticalReadAccess { state: id, scope } => {
-            if !matches!(&state.critical_scope, Some(active) if active.state == id && active.id == scope) {
+            if !matches!(&state.critical_scope, Some(active) if active.state == id && active.id == scope)
+            {
                 return Err(bad("E_CRITICAL_SCOPE_REQUIRED"));
             }
         }
         Op::CriticalWriteAccess { state: id, scope } => {
-            if !matches!(&state.critical_scope, Some(active) if active.state == id && active.id == scope) {
+            if !matches!(&state.critical_scope, Some(active) if active.state == id && active.id == scope)
+            {
                 return Err(bad("E_CRITICAL_SCOPE_REQUIRED"));
             }
-            if !matches!(&state.critical_scope, Some(active) if active.kind == BorrowKind::Mutable) {
+            if !matches!(&state.critical_scope, Some(active) if active.kind == BorrowKind::Mutable)
+            {
                 return Err(bad("E_CRITICAL_WRITE_REQUIRED"));
             }
         }
-        Op::CriticalCopyI64 { state: id, scope, into } => {
-            if !matches!(&state.critical_scope, Some(active) if active.state == id && active.id == scope) {
+        Op::CriticalCopyI64 {
+            state: id,
+            scope,
+            into,
+        } => {
+            if !matches!(&state.critical_scope, Some(active) if active.state == id && active.id == scope)
+            {
                 return Err(bad("E_CRITICAL_SCOPE_REQUIRED"));
             }
             if !fresh_destination(state, into) {
@@ -759,7 +785,11 @@ fn verify_internal(
                     return Err(Diagnostic::at("E_CRITICAL_SCOPE_ID_ZERO", block.id, index));
                 }
                 if !critical_scope_definitions.insert(*scope) {
-                    return Err(Diagnostic::at("E_CRITICAL_SCOPE_DEF_REUSED", block.id, index));
+                    return Err(Diagnostic::at(
+                        "E_CRITICAL_SCOPE_DEF_REUSED",
+                        block.id,
+                        index,
+                    ));
                 }
                 if critical_scope_definitions.len() > MAX_LOANS {
                     return Err(Diagnostic::at("E_CRITICAL_SCOPE_BUDGET", block.id, index));
