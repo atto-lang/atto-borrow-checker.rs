@@ -331,6 +331,17 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
             if state.critical_scope.is_some() {
                 return Err(bad("E_CRITICAL_REENTRANT"));
             }
+            // V0 cannot prove whether an ordinary loan aliases this sealed
+            // state. Require those loans to end before a critical callback
+            // until the trusted compiler provides authenticated disjointness.
+            if !state.loans.is_empty() {
+                return Err(bad("E_CRITICAL_PREEXISTING_LOAN"));
+            }
+            // A pending mailbox handoff has unresolved ownership authority.
+            // Critical admission must not overlap its commit/abort boundary.
+            if !state.pending_sends.is_empty() {
+                return Err(bad("E_CRITICAL_PENDING_SEND"));
+            }
             let kind = if matches!(op, Op::CriticalWriteEnter { .. }) {
                 BorrowKind::Mutable
             } else {
