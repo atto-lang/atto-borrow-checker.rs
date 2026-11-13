@@ -92,7 +92,7 @@ impl GuardQueue {
             return Err(GuardError::InvalidIdentity);
         }
         let region_id = NEXT_REGION_ID
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
             .map_err(|_| GuardError::TicketExhausted)?;
         Ok(Self {
             region_id,
