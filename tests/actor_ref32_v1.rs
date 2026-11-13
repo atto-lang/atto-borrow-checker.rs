@@ -19,6 +19,7 @@ fn case() -> (ActorArena, Allocation, Ref32, Loan) {
         incarnation: 2,
         generation: 7,
         allocation_id: 99,
+        allocation_generation: 5,
         base: 64,
         bytes: 32,
         retired: false,
@@ -29,6 +30,7 @@ fn case() -> (ActorArena, Allocation, Ref32, Loan) {
         incarnation: 2,
         generation: 7,
         allocation_id: 99,
+        allocation_generation: 5,
         offset: 72,
     };
     let loan = Loan {
@@ -37,6 +39,7 @@ fn case() -> (ActorArena, Allocation, Ref32, Loan) {
         incarnation: 2,
         generation: 7,
         allocation_id: 99,
+        allocation_generation: 5,
         mode: LoanMode::ExclusiveWrite,
         live: true,
     };
@@ -408,4 +411,43 @@ fn same_actor_loan_for_different_allocation_never_authorizes_access() {
         AccessMode::Read
     )
     .is_ok());
+}
+
+#[test]
+fn recycled_allocation_slot_rejects_stale_reference_and_loan() {
+    let (arena, mut allocation, mut reference, mut loan) = case();
+
+    // Same arena, actor generation and allocation ID; only the slot epoch changes.
+    allocation.allocation_generation = 6;
+    assert_eq!(
+        check_access(&arena, &allocation, &reference, &loan, 8, 8, AccessMode::Read),
+        Err(Ref32Error::StaleAllocation)
+    );
+    // A refreshed ref still cannot reuse the stale physical loan.
+    reference.allocation_generation = 6;
+    assert_eq!(
+        check_access(&arena, &allocation, &reference, &loan, 8, 8, AccessMode::Read),
+        Err(Ref32Error::StaleAllocation)
+    );
+    // New allocation + ref + trusted fresh loan metadata passes preflight.
+    loan.allocation_generation = 6;
+    assert!(check_access(&arena, &allocation, &reference, &loan, 8, 8, AccessMode::Read).is_ok());
+    // Previous ref cannot be resurrected with a new loan.
+    reference.allocation_generation = 5;
+    assert_eq!(
+        check_access(&arena, &allocation, &reference, &loan, 8, 8, AccessMode::Write),
+        Err(Ref32Error::StaleAllocation)
+    );
+}
+
+#[test]
+fn zero_allocation_epoch_is_never_valid_metadata() {
+    let (arena, mut allocation, mut reference, mut loan) = case();
+    allocation.allocation_generation = 0;
+    reference.allocation_generation = 0;
+    loan.allocation_generation = 0;
+    assert_eq!(
+        check_access(&arena, &allocation, &reference, &loan, 8, 8, AccessMode::Read),
+        Err(Ref32Error::StaleAllocation)
+    );
 }
