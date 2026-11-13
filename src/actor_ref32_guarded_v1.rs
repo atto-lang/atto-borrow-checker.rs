@@ -44,7 +44,11 @@ pub struct GuardedRef32Arena {
 }
 
 impl GuardedRef32Arena {
-    pub fn new(owner_actor: u64, generation: u64, capacity: u64) -> Result<Self, GuardedRef32Error> {
+    pub fn new(
+        owner_actor: u64,
+        generation: u64,
+        capacity: u64,
+    ) -> Result<Self, GuardedRef32Error> {
         // Construct the arena before the guard, and never expose either
         // independently; their initial generation is always identical.
         let arena = ActorArenaRef32::new(owner_actor, generation, capacity)?;
