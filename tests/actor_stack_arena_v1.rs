@@ -90,10 +90,7 @@ fn frame_budget_overflow_faults_only_the_owning_actor() {
 
     assert_eq!(faulty.push(24, 8), Err(StackError::Exhausted));
     assert!(faulty.is_faulted());
-    assert_eq!(
-        faulty.with_read(old, |b| b.len()),
-        Err(StackError::Faulted)
-    );
+    assert_eq!(faulty.with_read(old, |b| b.len()), Err(StackError::Faulted));
     assert_eq!(faulty.push(1, 1), Err(StackError::Faulted));
     sibling.with_write(valid, |b| b[0] = 42).unwrap();
     assert_eq!(sibling.with_read(valid, |b| b[0]), Ok(42));
