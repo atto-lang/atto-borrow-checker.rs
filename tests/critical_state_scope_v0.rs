@@ -339,6 +339,69 @@ fn branches_require_safe_lexical_exits_and_reject_unmatched_joins() {
     assert_eq!(verify(&invalid).unwrap_err().code, "E_CFG_JOIN_UNPROVEN");
 }
 
+
+#[test]
+fn detached_i64_snapshot_can_send_only_after_critical_exit() {
+    let snapshot = Op::CriticalCopyI64 {
+        state: 7,
+        scope: 10,
+        into: 42,
+    };
+    assert!(verify(&linear(vec![
+        enter_read(10),
+        snapshot.clone(),
+        Op::CriticalExit { scope: 10 },
+        Op::ActorSendCopy { owner: 42 },
+        Op::Return,
+    ])).is_ok());
+    denied(
+        vec![
+            enter_read(10),
+            snapshot,
+            Op::ActorSendCopy { owner: 42 },
+            Op::CriticalExit { scope: 10 },
+            Op::Return,
+        ],
+        "E_CRITICAL_EFFECT_UNPROVEN",
+    );
+}
+
+#[test]
+fn detached_i64_snapshot_has_checked_provenance_and_unique_id() {
+    denied(
+        vec![Op::CriticalCopyI64 { state: 7, scope: 10, into: 42 }, Op::Return],
+        "E_CRITICAL_SCOPE_REQUIRED",
+    );
+    denied(
+        vec![
+            enter_read(10),
+            Op::CriticalCopyI64 { state: 8, scope: 10, into: 42 },
+            Op::CriticalExit { scope: 10 },
+            Op::Return,
+        ],
+        "E_CRITICAL_SCOPE_REQUIRED",
+    );
+    denied(
+        vec![
+            enter_read(10),
+            Op::CriticalCopyI64 { state: 7, scope: 10, into: 0 },
+            Op::CriticalExit { scope: 10 },
+            Op::Return,
+        ],
+        "E_OWNER_ID_ZERO",
+    );
+    denied(
+        vec![
+            enter_read(10),
+            Op::CriticalCopyI64 { state: 7, scope: 10, into: 42 },
+            Op::CriticalCopyI64 { state: 7, scope: 10, into: 42 },
+            Op::CriticalExit { scope: 10 },
+            Op::Return,
+        ],
+        "E_OWNER_DEF_REUSED",
+    );
+}
+
 #[test]
 fn shadow_remains_empty_after_late_critical_failure() {
     let program = linear(vec![
