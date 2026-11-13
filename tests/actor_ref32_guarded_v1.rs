@@ -176,3 +176,83 @@ fn stop_fences_both_permits_and_refs_until_trusted_quiescence() {
     );
     replacement.release(&fresh_permit, 17).unwrap();
 }
+
+#[test]
+fn cancelled_writer_does_not_starve_later_readers_or_bypass_holder_checks() {
+    let mut arena = seeded(101, 8);
+    let reference = arena.allocate_before_seal(8, 8).unwrap();
+    arena.seal();
+
+    let first = arena.request(1, 8, Mode::Read).unwrap();
+    let active_readers = arena.admit_ready().unwrap();
+    assert_eq!(active_readers.len(), 1);
+    assert_eq!(active_readers[0].ticket(), first);
+
+    let queued_writer = arena.request(2, 8, Mode::Write).unwrap();
+    let later = arena.request(3, 8, Mode::Read).unwrap();
+    assert!(arena.admit_ready().unwrap().is_empty());
+
+    assert_eq!(
+        arena.cancel_pending(queued_writer, 3, 8),
+        Err(GuardedRef32Error::Guard(GuardError::WrongHolder))
+    );
+    assert!(arena.admit_ready().unwrap().is_empty());
+
+    assert_eq!(arena.cancel_pending(queued_writer, 2, 8), Ok(()));
+    assert_eq!(
+        arena.cancel_pending(queued_writer, 2, 8),
+        Err(GuardedRef32Error::Guard(GuardError::UnknownTicket))
+    );
+    let admitted = arena.admit_ready().unwrap();
+    assert_eq!(admitted.len(), 1);
+    assert_eq!(admitted[0].ticket(), later);
+    assert_eq!(
+        arena.checked_offset(reference, &admitted[0], 3, 0, 8, 8, false),
+        Ok(8)
+    );
+    assert_eq!(
+        arena.cancel_pending(first, 1, 8),
+        Err(GuardedRef32Error::Guard(GuardError::UnknownTicket))
+    );
+    arena.release(&admitted[0], 3).unwrap();
+    arena.release(&active_readers[0], 1).unwrap();
+}
+
+#[test]
+fn pending_cancellation_is_fenced_by_stop_and_generation() {
+    let mut arena = seeded(17, 5);
+    let reference = arena.allocate_before_seal(8, 8).unwrap();
+    arena.seal();
+    let waiting = arena.request(9, 5, Mode::Read).unwrap();
+    assert_eq!(
+        arena.cancel_pending(waiting, 9, 6),
+        Err(GuardedRef32Error::Guard(GuardError::StaleGeneration))
+    );
+    arena.retire(6).unwrap();
+    assert_eq!(
+        arena.cancel_pending(waiting, 9, 5),
+        Err(GuardedRef32Error::Guard(GuardError::StaleGeneration))
+    );
+    assert!(arena.may_reclaim());
+    assert_eq!(
+        arena.request(9, 6, Mode::Read),
+        Err(GuardedRef32Error::Guard(GuardError::Retired))
+    );
+    assert_eq!(
+        arena.allocate_before_seal(1, 1),
+        Err(GuardedRef32Error::Sealed)
+    );
+    // No scope can be acquired after STOP, even with a previously valid
+    // reference and a ticket that was waiting when retirement began.
+    assert!(arena.admit_ready().unwrap().is_empty());
+    let mut fresh = seeded(17, 6);
+    let _current = fresh.allocate_before_seal(8, 8).unwrap();
+    fresh.seal();
+    fresh.request(9, 6, Mode::Read).unwrap();
+    let permit = fresh.admit_ready().unwrap().pop().unwrap();
+    assert_eq!(
+        fresh.checked_offset(reference, &permit, 9, 0, 8, 8, false),
+        Err(GuardedRef32Error::Arena(Ref32Error::StaleGeneration))
+    );
+    fresh.release(&permit, 9).unwrap();
+}
