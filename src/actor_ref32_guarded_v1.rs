@@ -29,6 +29,37 @@ impl From<GuardError> for GuardedRef32Error {
     }
 }
 
+/// A single checked guest-memory operation. Keeping extent and mode together
+/// prevents callers from accidentally swapping independently typed scalar
+/// arguments while preserving fail-closed admission of explicit writes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Ref32Access {
+    displacement: u32,
+    bytes: u32,
+    alignment: u32,
+    write: bool,
+}
+
+impl Ref32Access {
+    pub const fn read(displacement: u32, bytes: u32, alignment: u32) -> Self {
+        Self {
+            displacement,
+            bytes,
+            alignment,
+            write: false,
+        }
+    }
+
+    pub const fn write(displacement: u32, bytes: u32, alignment: u32) -> Self {
+        Self {
+            displacement,
+            bytes,
+            alignment,
+            write: true,
+        }
+    }
+}
+
 /// Source-free model: one owner for a sealed set of ref32 allocations, plus
 /// one reader/writer permit queue covering the *whole* arena. Whole-arena
 /// scopes conservatively avoid disjoint-allocation aliasing assumptions.
@@ -138,23 +169,21 @@ impl GuardedRef32Arena {
         reference: Ref32,
         permit: &Permit,
         trusted_holder: u64,
-        displacement: u32,
-        bytes: u32,
-        alignment: u32,
-        write: bool,
+        access: Ref32Access,
     ) -> Result<u32, GuardedRef32Error> {
         if !self.sealed {
             return Err(GuardedRef32Error::Unsealed);
         }
-        self.queue.access(permit, trusted_holder, write)?;
+        self.queue
+            .access(permit, trusted_holder, access.write)?;
         self.arena
             .checked_offset(
                 reference,
                 self.arena.actor_id(),
                 self.arena.generation(),
-                displacement,
-                bytes,
-                alignment,
+                access.displacement,
+                access.bytes,
+                access.alignment,
             )
             .map_err(GuardedRef32Error::from)
     }
