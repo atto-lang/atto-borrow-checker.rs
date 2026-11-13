@@ -88,6 +88,7 @@ fn expected_effect(op: &Op) -> Effect {
         | Op::CriticalWriteEnter { .. }
         | Op::CriticalReadAccess { .. }
         | Op::CriticalWriteAccess { .. }
+        | Op::CriticalCopyI64 { .. }
         | Op::CriticalExit { .. } => Effect::CriticalRegion,
         Op::Return => Effect::Control,
         _ => Effect::Ownership,
