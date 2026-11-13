@@ -100,3 +100,67 @@ fn pool_lease_rejects_double_settlement() {
         Op::Return,
     ], "E_UNKNOWN_ACTOR_SEND_TICKET");
 }
+
+
+#[test]
+fn pool_lease_non_send_payload_cannot_enter_mailbox_escrow() {
+    fail(vec![
+        Op::Init {
+            owner: 1,
+            traits: Traits { is_copy: false, is_send: false },
+        },
+        Op::ActorSendPrepare { owner: 1, ticket: 17 },
+        Op::Return,
+    ], "E_ACTOR_SEND_PROOF_REQUIRED");
+}
+
+#[test]
+fn pool_lease_copy_send_does_not_bypass_unique_ownership() {
+    fail(vec![
+        init(),
+        Op::ActorSendCopy { owner: 1 },
+        Op::Return,
+    ], "E_ACTOR_COPY_SEND_PROOF_REQUIRED");
+}
+
+#[test]
+fn pool_lease_escrow_blocks_task_capture_and_second_send() {
+    for blocked in [
+        Op::TaskCaptureMove { owner: 1 },
+        Op::TaskCaptureCopy { owner: 1 },
+        Op::ActorSendPrepare { owner: 1, ticket: 18 },
+    ] {
+        fail(vec![
+            init(),
+            Op::ActorSendPrepare { owner: 1, ticket: 17 },
+            blocked,
+            Op::Return,
+        ], "E_ACTOR_SEND_PENDING");
+    }
+}
+
+#[test]
+fn pool_lease_committed_ticket_cannot_abort_or_commit_again() {
+    for terminal in [
+        Op::ActorSendAbort { ticket: 17 },
+        Op::ActorSendCommit { ticket: 17 },
+    ] {
+        fail(vec![
+            init(),
+            Op::ActorSendPrepare { owner: 1, ticket: 17 },
+            Op::ActorSendCommit { ticket: 17 },
+            terminal,
+            Op::Return,
+        ], "E_UNKNOWN_ACTOR_SEND_TICKET");
+    }
+}
+
+#[test]
+fn pool_lease_live_shared_loan_prevents_mutable_alias() {
+    fail(vec![
+        init(),
+        Op::Borrow { owner: 1, loan: 4, kind: BorrowKind::Shared },
+        Op::Borrow { owner: 1, loan: 5, kind: BorrowKind::Mutable },
+        Op::Return,
+    ], "E_BORROW_CONFLICT");
+}
