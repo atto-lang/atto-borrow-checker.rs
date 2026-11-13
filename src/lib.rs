@@ -130,6 +130,9 @@ pub enum Op {
     CriticalWriteEnter { state: ActorStateId, scope: CriticalScopeId },
     CriticalReadAccess { state: ActorStateId, scope: CriticalScopeId },
     CriticalWriteAccess { state: ActorStateId, scope: CriticalScopeId },
+    /// A compiler-proven i64 copied into a fresh local SSA owner while guarded.
+    /// Mailbox delivery of the detached copy must occur after CriticalExit.
+    CriticalCopyI64 { state: ActorStateId, scope: CriticalScopeId, into: OwnerId },
     CriticalExit { scope: CriticalScopeId },
     Return,
 }
@@ -210,6 +213,7 @@ fn shadow_kind(op: &Op) -> (&'static str, Option<OwnerId>) {
         Op::CriticalWriteEnter { .. } => ("CRITICAL_WRITE_ENTER", None),
         Op::CriticalReadAccess { .. } => ("CRITICAL_READ_ACCESS", None),
         Op::CriticalWriteAccess { .. } => ("CRITICAL_WRITE_ACCESS", None),
+        Op::CriticalCopyI64 { into, .. } => ("CRITICAL_COPY_I64", Some(into)),
         Op::CriticalExit { .. } => ("CRITICAL_EXIT", None),
         Op::Return => ("RETURN", None),
     }
@@ -365,6 +369,27 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
             if !matches!(&state.critical_scope, Some(active) if active.kind == BorrowKind::Mutable) {
                 return Err(bad("E_CRITICAL_WRITE_REQUIRED"));
             }
+        }
+        Op::CriticalCopyI64 { state: id, scope, into } => {
+            if !matches!(&state.critical_scope, Some(active) if active.state == id && active.id == scope) {
+                return Err(bad("E_CRITICAL_SCOPE_REQUIRED"));
+            }
+            if !fresh_destination(state, into) {
+                return Err(bad("E_OWNER_ID_REUSED_OR_BUDGET"));
+            }
+            // A detached i64, never a pointer, reference or capability.
+            let acquisition = next_acquisition(state);
+            state.ever_owned.insert(into);
+            state.live.insert(
+                into,
+                Owner {
+                    traits: Traits {
+                        is_copy: true,
+                        is_send: true,
+                    },
+                    acquisition,
+                },
+            );
         }
         Op::CriticalExit { scope } => {
             if !matches!(&state.critical_scope, Some(active) if active.id == scope) {
@@ -686,7 +711,9 @@ fn verify_internal(
         for (index, op) in block.operations.iter().enumerate() {
             let owner = match op {
                 Op::Init { owner, .. } => Some(*owner),
-                Op::Move { into, .. } | Op::Copy { into, .. } => Some(*into),
+                Op::Move { into, .. }
+                | Op::Copy { into, .. }
+                | Op::CriticalCopyI64 { into, .. } => Some(*into),
                 _ => None,
             };
             if let Some(id) = owner {
