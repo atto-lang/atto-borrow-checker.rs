@@ -138,31 +138,71 @@ fn restart_generation_allocation_and_retirement_are_fenced() {
     let (mut arena, mut allocation, mut reference, mut loan) = case();
     reference.generation = 6;
     assert_eq!(
-        check_access(&arena, &allocation, &reference, &loan, 8, 8, AccessMode::Read),
+        check_access(
+            &arena,
+            &allocation,
+            &reference,
+            &loan,
+            8,
+            8,
+            AccessMode::Read
+        ),
         Err(Ref32Error::StaleGeneration)
     );
     reference.generation = 7;
     reference.allocation_id = 100;
     assert_eq!(
-        check_access(&arena, &allocation, &reference, &loan, 8, 8, AccessMode::Read),
+        check_access(
+            &arena,
+            &allocation,
+            &reference,
+            &loan,
+            8,
+            8,
+            AccessMode::Read
+        ),
         Err(Ref32Error::WrongAllocation)
     );
     reference.allocation_id = 99;
     allocation.retired = true;
     assert_eq!(
-        check_access(&arena, &allocation, &reference, &loan, 8, 8, AccessMode::Read),
+        check_access(
+            &arena,
+            &allocation,
+            &reference,
+            &loan,
+            8,
+            8,
+            AccessMode::Read
+        ),
         Err(Ref32Error::Retired)
     );
     allocation.retired = false;
     arena.incarnation += 1;
     assert_eq!(
-        check_access(&arena, &allocation, &reference, &loan, 8, 8, AccessMode::Read),
+        check_access(
+            &arena,
+            &allocation,
+            &reference,
+            &loan,
+            8,
+            8,
+            AccessMode::Read
+        ),
         Err(Ref32Error::StaleGeneration)
     );
     arena.incarnation -= 1;
     loan.generation += 1;
     assert_eq!(
-        check_access(&arena, &allocation, &reference, &loan, 8, 8, AccessMode::Read),
+        check_access(
+            &arena,
+            &allocation,
+            &reference,
+            &loan,
+            8,
+            8,
+            AccessMode::Read
+        ),
         Err(Ref32Error::StaleGeneration)
     );
 }
@@ -172,24 +212,64 @@ fn allocation_extent_not_just_arena_size_is_enforced() {
     let (arena, allocation, mut reference, loan) = case();
     reference.offset = 96; // valid in arena but just beyond this allocation
     assert_eq!(
-        check_access(&arena, &allocation, &reference, &loan, 8, 8, AccessMode::Read),
+        check_access(
+            &arena,
+            &allocation,
+            &reference,
+            &loan,
+            8,
+            8,
+            AccessMode::Read
+        ),
         Err(Ref32Error::OutsideAllocation)
     );
     reference.offset = 72;
     assert_eq!(
-        check_access(&arena, &allocation, &reference, &loan, 32, 8, AccessMode::Read),
+        check_access(
+            &arena,
+            &allocation,
+            &reference,
+            &loan,
+            32,
+            8,
+            AccessMode::Read
+        ),
         Err(Ref32Error::OutsideAllocation)
     );
     assert_eq!(
-        check_access(&arena, &allocation, &reference, &loan, 0, 8, AccessMode::Read),
+        check_access(
+            &arena,
+            &allocation,
+            &reference,
+            &loan,
+            0,
+            8,
+            AccessMode::Read
+        ),
         Err(Ref32Error::InvalidExtent)
     );
     assert_eq!(
-        check_access(&arena, &allocation, &reference, &loan, 8, 16, AccessMode::Read),
+        check_access(
+            &arena,
+            &allocation,
+            &reference,
+            &loan,
+            8,
+            16,
+            AccessMode::Read
+        ),
         Err(Ref32Error::InvalidAlignment)
     );
     assert_eq!(
-        check_access(&arena, &allocation, &reference, &loan, 8, 0, AccessMode::Read),
+        check_access(
+            &arena,
+            &allocation,
+            &reference,
+            &loan,
+            8,
+            0,
+            AccessMode::Read
+        ),
         Err(Ref32Error::InvalidAlignment)
     );
 }
@@ -199,7 +279,15 @@ fn reject_4gib_plus_one_and_32_bit_wraparound() {
     let (mut arena, mut allocation, mut reference, loan) = case();
     arena.capacity_bytes = MAX_ARENA_BYTES + 1;
     assert_eq!(
-        check_access(&arena, &allocation, &reference, &loan, 8, 8, AccessMode::Read),
+        check_access(
+            &arena,
+            &allocation,
+            &reference,
+            &loan,
+            8,
+            8,
+            AccessMode::Read
+        ),
         Err(Ref32Error::InvalidArena)
     );
 
@@ -208,7 +296,15 @@ fn reject_4gib_plus_one_and_32_bit_wraparound() {
     allocation.bytes = 7;
     reference.offset = u32::MAX - 6;
     assert_eq!(
-        check_access(&arena, &allocation, &reference, &loan, 8, 8, AccessMode::Read),
+        check_access(
+            &arena,
+            &allocation,
+            &reference,
+            &loan,
+            8,
+            8,
+            AccessMode::Read
+        ),
         Err(Ref32Error::InvalidAlignment)
     );
     // Aligned start, but an attempted access would exceed the ref32 arena.
@@ -216,7 +312,15 @@ fn reject_4gib_plus_one_and_32_bit_wraparound() {
     allocation.bytes = 32;
     reference.offset = u32::MAX - 15;
     assert_eq!(
-        check_access(&arena, &allocation, &reference, &loan, 32, 8, AccessMode::Read),
+        check_access(
+            &arena,
+            &allocation,
+            &reference,
+            &loan,
+            32,
+            8,
+            AccessMode::Read
+        ),
         Err(Ref32Error::InvalidExtent)
     );
     allocation.bytes = 16;
@@ -238,12 +342,28 @@ fn null_guest_offset_is_rejected_even_when_allocation_claims_zero() {
     allocation.base = 0;
     reference.offset = 0;
     assert_eq!(
-        check_access(&arena, &allocation, &reference, &loan, 1, 1, AccessMode::Read),
+        check_access(
+            &arena,
+            &allocation,
+            &reference,
+            &loan,
+            1,
+            1,
+            AccessMode::Read
+        ),
         Err(Ref32Error::NullReference)
     );
     reference.offset = 1;
     assert_eq!(
-        check_access(&arena, &allocation, &reference, &loan, 1, 1, AccessMode::Read),
+        check_access(
+            &arena,
+            &allocation,
+            &reference,
+            &loan,
+            1,
+            1,
+            AccessMode::Read
+        ),
         Err(Ref32Error::InvalidExtent)
     );
 }
@@ -253,14 +373,39 @@ fn same_actor_loan_for_different_allocation_never_authorizes_access() {
     let (arena, allocation, reference, mut loan) = case();
     loan.allocation_id = 100;
     assert_eq!(
-        check_access(&arena, &allocation, &reference, &loan, 8, 8, AccessMode::Read),
+        check_access(
+            &arena,
+            &allocation,
+            &reference,
+            &loan,
+            8,
+            8,
+            AccessMode::Read
+        ),
         Err(Ref32Error::WrongAllocation)
     );
     loan.allocation_id = 0;
     assert_eq!(
-        check_access(&arena, &allocation, &reference, &loan, 8, 8, AccessMode::Write),
+        check_access(
+            &arena,
+            &allocation,
+            &reference,
+            &loan,
+            8,
+            8,
+            AccessMode::Write
+        ),
         Err(Ref32Error::WrongAllocation)
     );
     loan.allocation_id = 99;
-    assert!(check_access(&arena, &allocation, &reference, &loan, 8, 8, AccessMode::Read).is_ok());
+    assert!(check_access(
+        &arena,
+        &allocation,
+        &reference,
+        &loan,
+        8,
+        8,
+        AccessMode::Read
+    )
+    .is_ok());
 }
