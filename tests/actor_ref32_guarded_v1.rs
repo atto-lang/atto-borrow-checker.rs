@@ -14,7 +14,10 @@ fn seal_gate_rejects_early_admission_and_late_mutation() {
         arena.request(11, 7, Mode::Read),
         Err(GuardedRef32Error::Unsealed)
     );
-    assert_eq!(arena.admit_ready().unwrap_err(), GuardedRef32Error::Unsealed);
+    assert_eq!(
+        arena.admit_ready().unwrap_err(),
+        GuardedRef32Error::Unsealed
+    );
     let first = arena.allocate_before_seal(16, 8).unwrap();
     assert_eq!(first.offset(), 8);
     arena.seal();
@@ -24,7 +27,10 @@ fn seal_gate_rejects_early_admission_and_late_mutation() {
     );
     arena.request(11, 7, Mode::Read).unwrap();
     let permit = arena.admit_ready().unwrap().pop().unwrap();
-    assert_eq!(arena.checked_offset(first, &permit, 11, 0, 8, 8, false), Ok(8));
+    assert_eq!(
+        arena.checked_offset(first, &permit, 11, 0, 8, 8, false),
+        Ok(8)
+    );
     arena.release(&permit, 11).unwrap();
 }
 
@@ -142,8 +148,14 @@ fn stop_fences_both_permits_and_refs_until_trusted_quiescence() {
     arena.request(17, 6, Mode::Read).unwrap();
     let permit = arena.admit_ready().unwrap().pop().unwrap();
 
-    assert_eq!(arena.retire(6), Err(GuardedRef32Error::Guard(GuardError::StaleGeneration)));
-    assert_eq!(arena.checked_offset(reference, &permit, 17, 0, 8, 8, false), Ok(8));
+    assert_eq!(
+        arena.retire(6),
+        Err(GuardedRef32Error::Guard(GuardError::StaleGeneration))
+    );
+    assert_eq!(
+        arena.checked_offset(reference, &permit, 17, 0, 8, 8, false),
+        Ok(8)
+    );
     arena.retire(7).unwrap();
     assert_eq!(arena.generation(), 7);
     assert_eq!(
@@ -152,7 +164,9 @@ fn stop_fences_both_permits_and_refs_until_trusted_quiescence() {
     );
     assert_eq!(
         arena.release(&permit, 17),
-        Err(GuardedRef32Error::Guard(GuardError::PhysicalQuiescenceRequired))
+        Err(GuardedRef32Error::Guard(
+            GuardError::PhysicalQuiescenceRequired
+        ))
     );
     assert!(!arena.may_reclaim());
     assert_eq!(
