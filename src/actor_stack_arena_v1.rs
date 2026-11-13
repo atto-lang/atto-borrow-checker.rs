@@ -196,14 +196,16 @@ impl ActorStackArena {
 
     fn authenticated_range(&self, handle: FrameRef32) -> Result<Range<usize>, StackError> {
         self.check_live()?;
-        if handle.instance != self.instance {
-            return Err(StackError::UnknownFrame);
-        }
         if handle.actor != self.actor {
             return Err(StackError::ForeignActor);
         }
         if handle.generation != self.generation {
             return Err(StackError::StaleGeneration);
+        }
+        // A duplicate arena with the same actor and generation must not
+        // accept another instance's handle even when slot/offset matches.
+        if handle.instance != self.instance {
+            return Err(StackError::UnknownFrame);
         }
         if !self.frames.iter().any(|frame| frame.handle == handle) {
             return Err(StackError::UnknownFrame);
