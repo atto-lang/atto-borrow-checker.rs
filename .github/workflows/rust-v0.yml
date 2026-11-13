@@ -12,18 +12,25 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - name: Checkout immutable carrier/source tree
+      - name: Checkout immutable original PR head (not synthetic merge ref)
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
           fetch-depth: 1
-      - name: Verify checked-out Git identity
+      - name: Verify exact source HEAD and root tree before any Rust test
         shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
-          echo "checked_out_commit=$(git rev-parse HEAD)"
-          echo "checked_out_root_tree=$(git rev-parse 'HEAD^{tree}')"
+          [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           test -z "$(git status --porcelain)"
+          echo "checked_out_commit=$EXPECTED_HEAD"
+          echo "checked_out_root_tree=$(git rev-parse 'HEAD^{tree}')"
+          echo "HOST_RUST_MODEL_ONLY=1"
+          echo "COMPILER_GUEST_PARITY=NOT_VERIFIED"
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
         with:
