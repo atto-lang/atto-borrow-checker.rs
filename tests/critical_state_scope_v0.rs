@@ -174,6 +174,95 @@ fn suspend_actor_handoff_task_capture_and_generic_borrow_are_denied() {
     }
 }
 
+
+#[test]
+fn entry_denies_live_ordinary_loans_until_released() {
+    use atto_borrow_checker::{BorrowKind, Traits};
+    let init = Op::Init {
+        owner: 42,
+        traits: Traits {
+            is_copy: true,
+            is_send: true,
+        },
+    };
+    for kind in [BorrowKind::Shared, BorrowKind::Mutable] {
+        for enter in [enter_read(10), enter_write(10)] {
+            let loan = Op::Borrow {
+                owner: 42,
+                loan: 8,
+                kind,
+            };
+            denied(
+                vec![
+                    init.clone(),
+                    loan.clone(),
+                    enter.clone(),
+                    Op::CriticalExit { scope: 10 },
+                    Op::EndBorrow { loan: 8 },
+                    Op::Return,
+                ],
+                "E_CRITICAL_PREEXISTING_LOAN",
+            );
+            assert!(
+                verify(&linear(vec![
+                    init.clone(),
+                    loan,
+                    Op::EndBorrow { loan: 8 },
+                    enter,
+                    Op::CriticalExit { scope: 10 },
+                    Op::Return,
+                ]))
+                .is_ok()
+            );
+        }
+    }
+}
+
+#[test]
+fn entry_denies_pending_mailbox_send_until_commit_or_abort() {
+    use atto_borrow_checker::Traits;
+    let init = Op::Init {
+        owner: 42,
+        traits: Traits {
+            is_copy: false,
+            is_send: true,
+        },
+    };
+    let prepare = Op::ActorSendPrepare {
+        owner: 42,
+        ticket: 9,
+    };
+    for enter in [enter_read(10), enter_write(10)] {
+        denied(
+            vec![
+                init.clone(),
+                prepare.clone(),
+                enter.clone(),
+                Op::CriticalExit { scope: 10 },
+                Op::ActorSendAbort { ticket: 9 },
+                Op::Return,
+            ],
+            "E_CRITICAL_PENDING_SEND",
+        );
+        for resolved in [
+            Op::ActorSendAbort { ticket: 9 },
+            Op::ActorSendCommit { ticket: 9 },
+        ] {
+            assert!(
+                verify(&linear(vec![
+                    init.clone(),
+                    prepare.clone(),
+                    resolved,
+                    enter.clone(),
+                    Op::CriticalExit { scope: 10 },
+                    Op::Return,
+                ]))
+                .is_ok()
+            );
+        }
+    }
+}
+
 #[test]
 fn early_exit_and_unclosed_scope_are_not_proofs() {
     denied(
