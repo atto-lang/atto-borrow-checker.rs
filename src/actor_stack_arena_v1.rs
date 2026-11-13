@@ -153,11 +153,7 @@ impl ActorStackArena {
     /// this actor arena; the supervisor must retire and replace it.
     pub fn push(&mut self, len: u32, alignment: u32) -> Result<FrameRef32, StackError> {
         self.check_live()?;
-        if len == 0
-            || alignment == 0
-            || !alignment.is_power_of_two()
-            || alignment > MAX_ALIGNMENT
-        {
+        if len == 0 || alignment == 0 || !alignment.is_power_of_two() || alignment > MAX_ALIGNMENT {
             return Err(StackError::InvalidFrame);
         }
         if self.frames.len() >= self.frame_limit {
