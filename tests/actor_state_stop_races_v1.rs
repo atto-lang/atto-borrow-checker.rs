@@ -1,7 +1,7 @@
 use atto_borrow_checker::actor_state_guard_v1::{GuardError, Mode};
 use atto_borrow_checker::actor_state_runtime_v1::{GuardedActorRegion, RuntimeError};
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
 
