@@ -147,7 +147,7 @@ pub fn check_access(
     if mode == AccessMode::Write && loan.mode != LoanMode::ExclusiveWrite {
         return Err(Ref32Error::WriteRequiresExclusive);
     }
-    if alignment == 0 || !alignment.is_power_of_two() || !reference.offset.is_multiple_of(alignment) {
+    if !alignment.is_power_of_two() || !reference.offset.is_multiple_of(alignment) {
         return Err(Ref32Error::InvalidAlignment);
     }
     // Dereferencing an empty span is never an authorization for one byte.
