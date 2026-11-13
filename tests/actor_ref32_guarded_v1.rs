@@ -1,6 +1,8 @@
 //! Source-free logical integration tests, not compiler guest/native heap proof.
 use atto_borrow_checker::actor_arena_ref32_v1::Ref32Error;
-use atto_borrow_checker::actor_ref32_guarded_v1::{GuardedRef32Arena, GuardedRef32Error};
+use atto_borrow_checker::actor_ref32_guarded_v1::{
+    GuardedRef32Arena, GuardedRef32Error, Ref32Access,
+};
 use atto_borrow_checker::actor_state_guard_v1::{GuardError, Mode};
 
 fn seeded(owner: u64, generation: u64) -> GuardedRef32Arena {
@@ -28,7 +30,7 @@ fn seal_gate_rejects_early_admission_and_late_mutation() {
     arena.request(11, 7, Mode::Read).unwrap();
     let permit = arena.admit_ready().unwrap().pop().unwrap();
     assert_eq!(
-        arena.checked_offset(first, &permit, 11, 0, 8, 8, false),
+        arena.checked_offset(first, &permit, 11, Ref32Access::read(0, 8, 8)),
         Ok(8)
     );
     arena.release(&permit, 11).unwrap();
@@ -52,11 +54,11 @@ fn shared_readers_then_one_writer_then_late_reader_without_overtaking() {
     assert!(arena.admit_ready().unwrap().is_empty());
     for (holder, permit) in [(10, &readers[0]), (20, &readers[1])] {
         assert_eq!(
-            arena.checked_offset(reference, permit, holder, 4, 4, 4, false),
+            arena.checked_offset(reference, permit, holder, Ref32Access::read(4, 4, 4)),
             Ok(12)
         );
         assert_eq!(
-            arena.checked_offset(reference, permit, holder, 4, 4, 4, true),
+            arena.checked_offset(reference, permit, holder, Ref32Access::write(4, 4, 4)),
             Err(GuardedRef32Error::Guard(GuardError::WriteRequiresExclusive))
         );
     }
@@ -68,7 +70,7 @@ fn shared_readers_then_one_writer_then_late_reader_without_overtaking() {
     assert_eq!(writers.len(), 1);
     assert_eq!(writers[0].ticket(), writer);
     assert_eq!(
-        arena.checked_offset(reference, &writers[0], 30, 4, 4, 4, true),
+        arena.checked_offset(reference, &writers[0], 30, Ref32Access::write(4, 4, 4)),
         Ok(12)
     );
     assert!(arena.admit_ready().unwrap().is_empty());
@@ -96,18 +98,18 @@ fn matching_actor_ticket_does_not_allow_foreign_region_or_allocation() {
     let pa = a.admit_ready().unwrap().pop().unwrap();
     let pb = b.admit_ready().unwrap().pop().unwrap();
     assert_eq!(
-        b.checked_offset(b_ref, &pa, 77, 0, 8, 8, false),
+        b.checked_offset(b_ref, &pa, 77, Ref32Access::read(0, 8, 8)),
         Err(GuardedRef32Error::Guard(GuardError::WrongRegion))
     );
     assert_eq!(
-        a.checked_offset(b_ref, &pa, 77, 0, 8, 8, false),
+        a.checked_offset(b_ref, &pa, 77, Ref32Access::read(0, 8, 8)),
         Err(GuardedRef32Error::Arena(Ref32Error::WrongArena))
     );
     assert_eq!(
-        a.checked_offset(a_ref, &pa, 88, 0, 8, 8, false),
+        a.checked_offset(a_ref, &pa, 88, Ref32Access::read(0, 8, 8)),
         Err(GuardedRef32Error::Guard(GuardError::WrongHolder))
     );
-    assert_eq!(a.checked_offset(a_ref, &pa, 77, 0, 8, 8, false), Ok(8));
+    assert_eq!(a.checked_offset(a_ref, &pa, 77, Ref32Access::read(0, 8, 8)), Ok(8));
     a.release(&pa, 77).unwrap();
     b.release(&pb, 77).unwrap();
 }
@@ -122,20 +124,20 @@ fn checked_extent_rejects_cross_allocation_and_unaligned_access() {
     let permit = arena.admit_ready().unwrap().pop().unwrap();
 
     assert_eq!(
-        arena.checked_offset(first, &permit, 5, 7, 2, 1, true),
+        arena.checked_offset(first, &permit, 5, Ref32Access::write(7, 2, 1)),
         Err(GuardedRef32Error::Arena(Ref32Error::OutOfBounds))
     );
     assert_eq!(
-        arena.checked_offset(first, &permit, 5, 1, 1, 4, false),
+        arena.checked_offset(first, &permit, 5, Ref32Access::read(1, 1, 4)),
         Err(GuardedRef32Error::Arena(Ref32Error::Unaligned))
     );
     assert_eq!(
-        arena.checked_offset(first, &permit, 5, 0, 0, 1, false),
+        arena.checked_offset(first, &permit, 5, Ref32Access::read(0, 0, 1)),
         Err(GuardedRef32Error::Arena(Ref32Error::InvalidSize))
     );
     arena.release(&permit, 5).unwrap();
     assert_eq!(
-        arena.checked_offset(first, &permit, 5, 0, 1, 1, false),
+        arena.checked_offset(first, &permit, 5, Ref32Access::read(0, 1, 1)),
         Err(GuardedRef32Error::Guard(GuardError::UnknownTicket))
     );
 }
@@ -153,13 +155,13 @@ fn stop_fences_both_permits_and_refs_until_trusted_quiescence() {
         Err(GuardedRef32Error::Guard(GuardError::StaleGeneration))
     );
     assert_eq!(
-        arena.checked_offset(reference, &permit, 17, 0, 8, 8, false),
+        arena.checked_offset(reference, &permit, 17, Ref32Access::read(0, 8, 8)),
         Ok(8)
     );
     arena.retire(7).unwrap();
     assert_eq!(arena.generation(), 7);
     assert_eq!(
-        arena.checked_offset(reference, &permit, 17, 0, 8, 8, false),
+        arena.checked_offset(reference, &permit, 17, Ref32Access::read(0, 8, 8)),
         Err(GuardedRef32Error::Guard(GuardError::StaleGeneration))
     );
     assert_eq!(
@@ -181,11 +183,11 @@ fn stop_fences_both_permits_and_refs_until_trusted_quiescence() {
     replacement.request(17, 7, Mode::Read).unwrap();
     let fresh_permit = replacement.admit_ready().unwrap().pop().unwrap();
     assert_eq!(
-        replacement.checked_offset(reference, &fresh_permit, 17, 0, 8, 8, false),
+        replacement.checked_offset(reference, &fresh_permit, 17, Ref32Access::read(0, 8, 8)),
         Err(GuardedRef32Error::Arena(Ref32Error::StaleGeneration))
     );
     assert_eq!(
-        replacement.checked_offset(fresh, &fresh_permit, 17, 0, 8, 8, false),
+        replacement.checked_offset(fresh, &fresh_permit, 17, Ref32Access::read(0, 8, 8)),
         Ok(8)
     );
     replacement.release(&fresh_permit, 17).unwrap();
@@ -221,7 +223,7 @@ fn cancelled_writer_does_not_starve_later_readers_or_bypass_holder_checks() {
     assert_eq!(admitted.len(), 1);
     assert_eq!(admitted[0].ticket(), later);
     assert_eq!(
-        arena.checked_offset(reference, &admitted[0], 3, 0, 8, 8, false),
+        arena.checked_offset(reference, &admitted[0], 3, Ref32Access::read(0, 8, 8)),
         Ok(8)
     );
     assert_eq!(
@@ -265,7 +267,7 @@ fn pending_cancellation_is_fenced_by_stop_and_generation() {
     fresh.request(9, 6, Mode::Read).unwrap();
     let permit = fresh.admit_ready().unwrap().pop().unwrap();
     assert_eq!(
-        fresh.checked_offset(reference, &permit, 9, 0, 8, 8, false),
+        fresh.checked_offset(reference, &permit, 9, Ref32Access::read(0, 8, 8)),
         Err(GuardedRef32Error::Arena(Ref32Error::StaleGeneration))
     );
     fresh.release(&permit, 9).unwrap();
