@@ -61,6 +61,8 @@ pub struct Loan {
     pub arena_id: u32,
     pub incarnation: u64,
     pub generation: u64,
+    /// Allocation-bound proof context; not a physical or forge-resistant token.
+    pub allocation_id: u64,
     pub mode: LoanMode,
     pub live: bool,
 }
@@ -78,6 +80,7 @@ pub enum Ref32Error {
     WrongDomain,
     StaleGeneration,
     WrongAllocation,
+    NullReference,
     MissingLoan,
     WriteRequiresExclusive,
     InvalidAlignment,
@@ -127,8 +130,16 @@ pub fn check_access(
     {
         return Err(Ref32Error::StaleGeneration);
     }
-    if allocation.allocation_id == 0 || reference.allocation_id != allocation.allocation_id {
+    if allocation.allocation_id == 0
+        || reference.allocation_id != allocation.allocation_id
+        || loan.allocation_id != allocation.allocation_id
+    {
         return Err(Ref32Error::WrongAllocation);
+    }
+    // A null guest offset must never become valid by supplying metadata whose
+    // allocation also starts at zero. The entire first byte is reserved.
+    if reference.offset == 0 {
+        return Err(Ref32Error::NullReference);
     }
     if !loan.live {
         return Err(Ref32Error::MissingLoan);
@@ -143,7 +154,7 @@ pub fn check_access(
         return Err(Ref32Error::InvalidAlignment);
     }
     // Dereferencing an empty span is never an authorization for one byte.
-    if access_bytes == 0 || allocation.bytes == 0 {
+    if access_bytes == 0 || allocation.bytes == 0 || allocation.base == 0 {
         return Err(Ref32Error::InvalidExtent);
     }
     let allocation_end = u64::from(allocation.base) + u64::from(allocation.bytes);
