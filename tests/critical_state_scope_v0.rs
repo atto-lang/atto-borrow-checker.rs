@@ -174,7 +174,6 @@ fn suspend_actor_handoff_task_capture_and_generic_borrow_are_denied() {
     }
 }
 
-
 #[test]
 fn entry_denies_live_ordinary_loans_until_released() {
     use atto_borrow_checker::{BorrowKind, Traits};
@@ -203,17 +202,15 @@ fn entry_denies_live_ordinary_loans_until_released() {
                 ],
                 "E_CRITICAL_PREEXISTING_LOAN",
             );
-            assert!(
-                verify(&linear(vec![
-                    init.clone(),
-                    loan,
-                    Op::EndBorrow { loan: 8 },
-                    enter,
-                    Op::CriticalExit { scope: 10 },
-                    Op::Return,
-                ]))
-                .is_ok()
-            );
+            assert!(verify(&linear(vec![
+                init.clone(),
+                loan,
+                Op::EndBorrow { loan: 8 },
+                enter,
+                Op::CriticalExit { scope: 10 },
+                Op::Return,
+            ]))
+            .is_ok());
         }
     }
 }
@@ -248,27 +245,22 @@ fn entry_denies_pending_mailbox_send_until_commit_or_abort() {
             Op::ActorSendAbort { ticket: 9 },
             Op::ActorSendCommit { ticket: 9 },
         ] {
-            assert!(
-                verify(&linear(vec![
-                    init.clone(),
-                    prepare.clone(),
-                    resolved,
-                    enter.clone(),
-                    Op::CriticalExit { scope: 10 },
-                    Op::Return,
-                ]))
-                .is_ok()
-            );
+            assert!(verify(&linear(vec![
+                init.clone(),
+                prepare.clone(),
+                resolved,
+                enter.clone(),
+                Op::CriticalExit { scope: 10 },
+                Op::Return,
+            ]))
+            .is_ok());
         }
     }
 }
 
 #[test]
 fn early_exit_and_unclosed_scope_are_not_proofs() {
-    denied(
-        vec![enter_write(10), Op::Return],
-        "E_CRITICAL_SCOPE_ESCAPE",
-    );
+    denied(vec![enter_write(10), Op::Return], "E_CRITICAL_SCOPE_ESCAPE");
     denied(
         vec![enter_write(10), Op::CriticalExit { scope: 11 }, Op::Return],
         "E_CRITICAL_SCOPE_REQUIRED",
@@ -287,10 +279,7 @@ fn zero_and_duplicate_state_scope_identifiers_fail_preflight() {
         ],
         "E_CRITICAL_STATE_ID_ZERO",
     );
-    denied(
-        vec![enter_read(0), Op::Return],
-        "E_CRITICAL_SCOPE_ID_ZERO",
-    );
+    denied(vec![enter_read(0), Op::Return], "E_CRITICAL_SCOPE_ID_ZERO");
     denied(
         vec![
             enter_read(10),
@@ -335,10 +324,11 @@ fn branches_require_safe_lexical_exits_and_reject_unmatched_joins() {
     };
     assert!(verify(&matched).is_ok());
     let mut invalid = matched;
-    invalid.blocks[2].operations.push(Op::CriticalExit { scope: 10 });
+    invalid.blocks[2]
+        .operations
+        .push(Op::CriticalExit { scope: 10 });
     assert_eq!(verify(&invalid).unwrap_err().code, "E_CFG_JOIN_UNPROVEN");
 }
-
 
 #[test]
 fn detached_i64_snapshot_can_send_only_after_critical_exit() {
@@ -353,7 +343,8 @@ fn detached_i64_snapshot_can_send_only_after_critical_exit() {
         Op::CriticalExit { scope: 10 },
         Op::ActorSendCopy { owner: 42 },
         Op::Return,
-    ])).is_ok());
+    ]))
+    .is_ok());
     denied(
         vec![
             enter_read(10),
@@ -369,13 +360,24 @@ fn detached_i64_snapshot_can_send_only_after_critical_exit() {
 #[test]
 fn detached_i64_snapshot_has_checked_provenance_and_unique_id() {
     denied(
-        vec![Op::CriticalCopyI64 { state: 7, scope: 10, into: 42 }, Op::Return],
+        vec![
+            Op::CriticalCopyI64 {
+                state: 7,
+                scope: 10,
+                into: 42,
+            },
+            Op::Return,
+        ],
         "E_CRITICAL_SCOPE_REQUIRED",
     );
     denied(
         vec![
             enter_read(10),
-            Op::CriticalCopyI64 { state: 8, scope: 10, into: 42 },
+            Op::CriticalCopyI64 {
+                state: 8,
+                scope: 10,
+                into: 42,
+            },
             Op::CriticalExit { scope: 10 },
             Op::Return,
         ],
@@ -384,7 +386,11 @@ fn detached_i64_snapshot_has_checked_provenance_and_unique_id() {
     denied(
         vec![
             enter_read(10),
-            Op::CriticalCopyI64 { state: 7, scope: 10, into: 0 },
+            Op::CriticalCopyI64 {
+                state: 7,
+                scope: 10,
+                into: 0,
+            },
             Op::CriticalExit { scope: 10 },
             Op::Return,
         ],
@@ -393,8 +399,16 @@ fn detached_i64_snapshot_has_checked_provenance_and_unique_id() {
     denied(
         vec![
             enter_read(10),
-            Op::CriticalCopyI64 { state: 7, scope: 10, into: 42 },
-            Op::CriticalCopyI64 { state: 7, scope: 10, into: 42 },
+            Op::CriticalCopyI64 {
+                state: 7,
+                scope: 10,
+                into: 42,
+            },
+            Op::CriticalCopyI64 {
+                state: 7,
+                scope: 10,
+                into: 42,
+            },
             Op::CriticalExit { scope: 10 },
             Op::Return,
         ],
@@ -406,8 +420,14 @@ fn detached_i64_snapshot_has_checked_provenance_and_unique_id() {
 fn shadow_remains_empty_after_late_critical_failure() {
     let program = linear(vec![
         enter_read(10),
-        Op::CriticalReadAccess { state: 7, scope: 10 },
-        Op::CriticalWriteAccess { state: 7, scope: 10 },
+        Op::CriticalReadAccess {
+            state: 7,
+            scope: 10,
+        },
+        Op::CriticalWriteAccess {
+            state: 7,
+            scope: 10,
+        },
         Op::Return,
     ]);
     let mut events = Vec::new();
