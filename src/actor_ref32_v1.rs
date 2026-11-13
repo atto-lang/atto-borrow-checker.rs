@@ -37,6 +37,9 @@ pub struct Allocation {
     pub incarnation: u64,
     pub generation: u64,
     pub allocation_id: u64,
+    /// Nonzero slot-reuse epoch independent of actor incarnation.
+    /// The runtime MUST advance on reuse and retire the slot before wrap.
+    pub allocation_generation: u64,
     pub base: u32,
     pub bytes: u32,
     pub retired: bool,
@@ -50,6 +53,7 @@ pub struct Ref32 {
     pub incarnation: u64,
     pub generation: u64,
     pub allocation_id: u64,
+    pub allocation_generation: u64,
     pub offset: u32,
 }
 
@@ -63,6 +67,7 @@ pub struct Loan {
     pub generation: u64,
     /// Allocation-bound proof context; not a physical or forge-resistant token.
     pub allocation_id: u64,
+    pub allocation_generation: u64,
     pub mode: LoanMode,
     pub live: bool,
 }
@@ -80,6 +85,7 @@ pub enum Ref32Error {
     WrongDomain,
     StaleGeneration,
     WrongAllocation,
+    StaleAllocation,
     NullReference,
     MissingLoan,
     WriteRequiresExclusive,
@@ -135,6 +141,14 @@ pub fn check_access(
         || loan.allocation_id != allocation.allocation_id
     {
         return Err(Ref32Error::WrongAllocation);
+    }
+    // A recycled slot within one actor incarnation must never revive a
+    // stale reference or an old read/write loan.
+    if allocation.allocation_generation == 0
+        || reference.allocation_generation != allocation.allocation_generation
+        || loan.allocation_generation != allocation.allocation_generation
+    {
+        return Err(Ref32Error::StaleAllocation);
     }
     // A null guest offset must never become valid by supplying metadata whose
     // allocation also starts at zero. The entire first byte is reserved.
