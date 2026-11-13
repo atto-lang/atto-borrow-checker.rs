@@ -75,7 +75,9 @@ impl GuardedRef32Arena {
         if self.sealed {
             return Err(GuardedRef32Error::Sealed);
         }
-        Ok(self.arena.allocate(size, alignment)?)
+        self.arena
+            .allocate(size, alignment)
+            .map_err(GuardedRef32Error::from)
     }
 
     pub fn seal(&mut self) {
@@ -93,7 +95,9 @@ impl GuardedRef32Arena {
         if !self.sealed {
             return Err(GuardedRef32Error::Unsealed);
         }
-        Ok(self.queue.request(trusted_holder, generation, mode)?)
+        self.queue
+            .request(trusted_holder, generation, mode)
+            .map_err(GuardedRef32Error::from)
     }
 
     pub fn admit_ready(&mut self) -> Result<Vec<Permit>, GuardedRef32Error> {
@@ -116,9 +120,9 @@ impl GuardedRef32Arena {
         if !self.sealed {
             return Err(GuardedRef32Error::Unsealed);
         }
-        Ok(self
-            .queue
-            .cancel_pending(ticket, trusted_holder, generation)?)
+        self.queue
+            .cancel_pending(ticket, trusted_holder, generation)
+            .map_err(GuardedRef32Error::from)
     }
 
     /// A successful result is strictly a *logical preflight*: the authenticated
@@ -139,14 +143,16 @@ impl GuardedRef32Arena {
             return Err(GuardedRef32Error::Unsealed);
         }
         self.queue.access(permit, trusted_holder, write)?;
-        Ok(self.arena.checked_offset(
-            reference,
-            self.arena.actor_id(),
-            self.arena.generation(),
-            displacement,
-            bytes,
-            alignment,
-        )?)
+        self.arena
+            .checked_offset(
+                reference,
+                self.arena.actor_id(),
+                self.arena.generation(),
+                displacement,
+                bytes,
+                alignment,
+            )
+            .map_err(GuardedRef32Error::from)
     }
 
     pub fn release(
@@ -154,7 +160,9 @@ impl GuardedRef32Arena {
         permit: &Permit,
         trusted_holder: u64,
     ) -> Result<(), GuardedRef32Error> {
-        Ok(self.queue.release(permit, trusted_holder)?)
+        self.queue
+            .release(permit, trusted_holder)
+            .map_err(GuardedRef32Error::from)
     }
 
     /// Fences old permits and ref32 metadata in the same logical transition.
@@ -178,7 +186,9 @@ impl GuardedRef32Arena {
         permit: &Permit,
         trusted_holder: u64,
     ) -> Result<(), GuardedRef32Error> {
-        Ok(self.queue.complete_physical_quiescence(permit, trusted_holder)?)
+        self.queue
+            .complete_physical_quiescence(permit, trusted_holder)
+            .map_err(GuardedRef32Error::from)
     }
 
     /// Necessary logical state, NOT independent proof of physical reclamation.
