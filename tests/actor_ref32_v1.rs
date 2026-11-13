@@ -203,9 +203,9 @@ fn reject_4gib_plus_one_and_32_bit_wraparound() {
     );
 
     arena.capacity_bytes = MAX_ARENA_BYTES;
-    allocation.base = u32::MAX - 7;
-    allocation.bytes = 8;
-    reference.offset = u32::MAX - 7;
+    allocation.base = u32::MAX - 6;
+    allocation.bytes = 7;
+    reference.offset = u32::MAX - 6;
     assert_eq!(
         check_access(&arena, &allocation, &reference, &loan, 8, 8, AccessMode::Read),
         Err(Ref32Error::InvalidAlignment)
