@@ -6,6 +6,12 @@ on:
       - "src/lib.rs"
       - "src/mir_v1.rs"
       - "src/cyclic_v1.rs"
+      - "src/actor_state_guard_v1.rs"
+      - "src/actor_state_runtime_v1.rs"
+      - "tests/actor_state_guard_v1.rs"
+      - "tests/actor_state_runtime_v1.rs"
+      - ".github/workflows/rust-v0.yml"
+      - ".github/workflows/rust-actor-exact-ephemeral.yml"
       - ".github/workflows/borrow-mir-rust-exact-head.yml"
   workflow_dispatch:
 permissions:
