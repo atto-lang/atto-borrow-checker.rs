@@ -5,6 +5,11 @@
 //! install/retire physical guards, and establish physical quiescence before
 //! invoking \`complete_physical_quiescence\`. Guest code gets no access to this API.
 use std::collections::{BTreeMap, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+// Each queue owns an independent capability namespace, including queues with
+// identical generation, actor IDs and first ticket. Never wrap this counter.
+static NEXT_REGION_ID: AtomicU64 = AtomicU64::new(1);
 
 pub const MAX_OUTSTANDING: usize = 1024;
 
@@ -24,6 +29,7 @@ pub enum GuardError {
     TicketExhausted,
     UnknownTicket,
     WrongHolder,
+    WrongRegion,
     WriteRequiresExclusive,
     NotRetired,
     PhysicalQuiescenceRequired,
@@ -46,6 +52,7 @@ struct Pending {
 #[must_use]
 #[derive(Debug)]
 pub struct Permit {
+    region_id: u64,
     ticket: u64,
     record: Record,
 }
@@ -71,6 +78,7 @@ impl Permit {
 /// by the host; exposing this structure to an actor is not authorization.
 #[derive(Debug)]
 pub struct GuardQueue {
+    region_id: u64,
     generation: u64,
     next_ticket: u64,
     waiting: VecDeque<Pending>,
@@ -83,7 +91,11 @@ impl GuardQueue {
         if generation == 0 {
             return Err(GuardError::InvalidIdentity);
         }
+        let region_id = NEXT_REGION_ID
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+            .map_err(|_| GuardError::TicketExhausted)?;
         Ok(Self {
+            region_id,
             generation,
             next_ticket: 1,
             waiting: VecDeque::new(),
@@ -163,6 +175,7 @@ impl GuardQueue {
             let pending = self.waiting.pop_front().expect("front was present");
             self.active.insert(pending.ticket, pending.record);
             granted.push(Permit {
+                region_id: self.region_id,
                 ticket: pending.ticket,
                 record: pending.record,
             });
@@ -174,6 +187,11 @@ impl GuardQueue {
     }
 
     fn authenticate(&self, permit: &Permit, actor: u64) -> Result<Record, GuardError> {
+        // Ticket numbers restart at one per queue; matching ticket/actor/mode
+        // in another queue is not authority over this region.
+        if permit.region_id != self.region_id {
+            return Err(GuardError::WrongRegion);
+        }
         if actor == 0 || permit.record.actor != actor {
             return Err(GuardError::WrongHolder);
         }
