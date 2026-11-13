@@ -109,7 +109,10 @@ fn matching_actor_ticket_does_not_allow_foreign_region_or_allocation() {
         a.checked_offset(a_ref, &pa, 88, Ref32Access::read(0, 8, 8)),
         Err(GuardedRef32Error::Guard(GuardError::WrongHolder))
     );
-    assert_eq!(a.checked_offset(a_ref, &pa, 77, Ref32Access::read(0, 8, 8)), Ok(8));
+    assert_eq!(
+        a.checked_offset(a_ref, &pa, 77, Ref32Access::read(0, 8, 8)),
+        Ok(8)
+    );
     a.release(&pa, 77).unwrap();
     b.release(&pb, 77).unwrap();
 }
