@@ -22,6 +22,10 @@ with the existing `actor_state_guard_v1::GuardQueue`:
   two disjoint allocations are independently safe.
 - Shared readers can coexist. A queued exclusive writer waits for readers,
   then excludes new readers. A reader cannot authorize a write.
+- An authenticated holder can cancel only its **pending** request without
+  parking a carrier; cancellation of an admitted permit must fail. A cancelled
+  queued writer must not permanently block later readers, and cancellation
+  after STOP or under a stale generation must fail closed.
 - Tokens from another queue are rejected even if numeric actor/ticket IDs
   match. A valid permit does not override the canonical allocation bounds,
   actor-domain, alignment or generation checks.
