@@ -57,6 +57,7 @@ fn site(id: u64, verb: Verb) -> BangSite {
         region: None,
         place_is_writable: false,
         detached_copy_proven: false,
+        frozen_sync_proven: false,
     }
 }
 
@@ -208,6 +209,7 @@ fn borrowed_copy_creates_owned_snapshot_that_may_be_shared_later() {
     let mut share = site(5, Verb::Share);
     share.from = 2;
     share.region = Some(3);
+    share.frozen_sync_proven = true;
     check(&p, &[borrow, snapshot, share]).unwrap();
 }
 
@@ -235,6 +237,7 @@ fn frozen_share_consumes_owner_without_copying_it() {
     ]);
     let mut s = site(2, Verb::Share);
     s.region = Some(3);
+    s.frozen_sync_proven = true;
     assert!(check(&p, &[s]).unwrap().cleanup_by_exit[&0].is_empty());
 }
 
@@ -242,6 +245,7 @@ fn frozen_share_consumes_owner_without_copying_it() {
 fn share_requires_independent_send_and_sync_witnesses() {
     let mut s = site(2, Verb::Share);
     s.region = Some(3);
+    s.frozen_sync_proven = true;
     let no_send = mir(vec![
         init(false, false),
         Op::PublishFrozen { owner: 1, region: 3, sync_proven: true },
@@ -265,6 +269,7 @@ fn cannot_launder_borrowed_or_actor_owned_state_into_shared_authority() {
     ]);
     let mut s = site(2, Verb::Share);
     s.region = Some(3);
+    s.frozen_sync_proven = true;
     s.source_authority = SourceAuthority::BorrowedLoan;
     assert_eq!(check(&p, &[s.clone()]), Err(BangError::Invalid("E_BANG_SHARE_BORROWED")));
     s.source_authority = SourceAuthority::ActorState;
