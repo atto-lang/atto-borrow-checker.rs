@@ -64,3 +64,44 @@ Exact-head checks required:
 An authored Rust test is not an executed result, and host tests do not prove AttoLang guest behavior. Record the exact branch HEAD, source Git tree, every executed CI step and test outcome before marking validation PASS.
 
 Next: implement the real alpha-like combined-graph loan reachability and an independent typechecker/MIR adapter. Keep this experimental oracle isolated until then.
+
+
+## Path-sensitive lifetime inference (second experimental slice)
+
+The first slice required the adapter to supply every point's live_origins
+directly. A fabricated empty set could appear to approve an invalid borrow.
+
+The new analyze_with_inferred_liveness(&Facts, &[OriginUse]) rejects caller-
+supplied live_origins and derives pointwise liveness by a bounded backwards MAY
+fixed point over the supplied CFG, terminal uses and transitive reverse subset
+constraints. It then runs the existing forward analyze loan-invalidation pass.
+A return of a borrowed value is an OriginUse on its return arm. It does not
+create a use on any alternate arm. This reproduces the familiar
+HashMap.get_mut -> Some(return borrow) / None(insert, retry) regression.
+
+Important limitations:
+- OriginUse is still compiler-supplied, NOT independently complete or
+  cryptographically attested. Omission of a return/capture/FFI use can admit
+  unsafe data. Until independent typed-MIR source and emission inventories
+  exist, these results are diagnostic HOST_ONLY model reports.
+- The backwards inference currently lacks SSA region definition/overwrite
+  kills, so it can conservatively retain a region too long after reassignment;
+  this is a false rejection, not a justification to weaken safety.
+- The output does NOT authorize a borrow across await/select, actor hops,
+  graph copying, mutable reborrowing, raw pointers, destructor effects or
+  exceptional cleanup. Runtime pinning, stack/arena generation fencing and
+  Sendable isolation remain separate obligations.
+- Function-entry borrowed arguments must be represented as entry issued loans.
+  Every return/capture that needs an origin must be an OriginUse.
+- Resource budgets apply to origin count, retained facts, CFG edges, input
+  use counts and inference work; exhaustion fails closed.
+
+New tests include a full five-point None-branch insertion/relookup flow,
+negative mutations on either borrowed arm, join-required borrow preservation,
+outlives/subset propagation, loop backedges, malformed source inventories,
+and bounded adversarial inputs.
+
+Rust's actual Polonius Alpha uses a more sophisticated combined CFG/outlives
+formulation. The new pass is intentionally narrower, and does not claim to
+implement Rust's actual algorithm, stabilize AttoLang's syntax, or certify
+compiled guests.
