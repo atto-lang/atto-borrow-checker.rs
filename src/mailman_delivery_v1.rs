@@ -201,11 +201,14 @@ pub fn verify_delivery(
     }
     let same_domain = request.source_domain == request.destination_domain;
     let unique = inventory.nodes.iter().all(|node| {
-        !node.mutable
-            || (node.owner_domain == request.source_domain
+        if node.frozen && node.sync && !node.mutable {
+            true
+        } else {
+            node.owner_domain == request.source_domain
                 && node.escaped_aliases == 0
                 && node.active_readers == 0
-                && !node.active_writer)
+                && !node.active_writer
+        }
     });
     let no_outstanding_loans = inventory.nodes.iter().all(|node| {
         node.active_readers == 0 && !node.active_writer
@@ -224,6 +227,16 @@ pub fn verify_delivery(
             SelectedDelivery::Transfer
         }
         DeliveryMode::DeepCopy => {
+            if inventory.nodes.iter().any(|node| node.active_writer) {
+                return Err(Error::LeaseConflict);
+            }
+            if inventory.nodes.iter().any(|node| {
+                node.mutable
+                    && (node.owner_domain != request.source_domain
+                        || node.escaped_aliases != 0)
+            }) && !request.scoped_lease_proven {
+                return Err(Error::LeaseScopeRequired);
+            }
             if inventory.nodes.iter().any(|node| node.mutable && !node.deep_copyable) {
                 return Err(Error::CopyWitnessRequired);
             }
@@ -239,7 +252,7 @@ pub fn verify_delivery(
             }
         }
         DeliveryMode::FrozenShare => {
-            if inventory.nodes.iter().any(|node| !node.frozen || !node.sync) {
+            if inventory.nodes.iter().any(|node| node.mutable || !node.frozen || !node.sync) {
                 return Err(Error::FrozenSyncRequired);
             }
             if !same_domain {
@@ -258,8 +271,10 @@ pub fn verify_delivery(
                 return Err(Error::LeaseSuspendUnproven);
             }
             if inventory.nodes.iter().any(|node| {
-                node.mutable
-                    && (node.owner_domain != request.source_domain || node.escaped_aliases != 0)
+                (node.mutable
+                    && (node.owner_domain != request.source_domain || node.escaped_aliases != 0))
+                    || (node.owner_domain != request.source_domain
+                        && (!node.frozen || !node.sync))
             }) {
                 return Err(Error::OwnershipNotExclusive);
             }
