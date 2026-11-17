@@ -182,6 +182,7 @@ impl VerifiedDelivery {
     }
 }
 
+#[allow(dead_code)] // Allocation-key getters are reserved for the trusted runtime adapter.
 impl AllocationKey {
     pub(crate) fn domain(self) -> u64 {
         self.domain
