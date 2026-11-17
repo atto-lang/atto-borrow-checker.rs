@@ -121,7 +121,7 @@ fn check_type(
     }
     for field in &ty.fields {
         match field.kind {
-            FieldKind::Scalar | FieldKind::ImmutableShared => {},
+            FieldKind::Scalar | FieldKind::ImmutableShared => {}
             FieldKind::SharedMutable(nested) if mode == CopyMode::Shallow => {
                 // Shallow references are permitted only because the frontend
                 // supplied a verified shared-mutable field kind. They remain
@@ -213,16 +213,20 @@ pub fn admit_copy(descriptors: &[TypeDescriptor], request: CopyRequest) -> Resul
             is_ancestor = true;
             break;
         }
-        ancestor = all.get(&id)
-            .ok_or(Error("E_COPY_AOT_WITNESS"))?.parent;
+        ancestor = all.get(&id).ok_or(Error("E_COPY_AOT_WITNESS"))?.parent;
     }
     if !is_ancestor {
         return Err(Error("E_COPY_LAYOUT"));
     }
     let mut visited = BTreeSet::new();
     check_type(
-        request.concrete_type, &all, request.mode, request.actor_send,
-        &mut BTreeSet::new(), &mut visited, 0,
+        request.concrete_type,
+        &all,
+        request.mode,
+        request.actor_send,
+        &mut BTreeSet::new(),
+        &mut visited,
+        0,
     )?;
     return Ok(CopyPlan {
         concrete_type: request.concrete_type,
