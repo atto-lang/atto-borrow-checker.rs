@@ -4,11 +4,11 @@
 //! The compiler must independently derive AND attest the full instruction,
 //! origin, alias, exception/cancellation and emitted-effect inventories before
 //! any result could influence accepted AttoLang programs.
-use std::collections::{BTreeMap, BTreeSet};
 use crate::mir_v1::{self, MirError, MirFunction};
 use crate::polonius_facts_v1::{Error, Facts, OriginId, OriginUse, Point, PointId};
 use crate::polonius_ssa_v1::{analyze_ssa, Definition, Input, PhiInput, SsaReport};
 use crate::Op;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The full typed-MIR instruction ID must have exactly one fact row. These
 /// caller-supplied use/def origins are NOT authenticated by this interface.
@@ -53,12 +53,16 @@ pub struct DiagnosticProjection {
 ///
 /// Success is an observation, NOT safe-to-codegen authorization. In particular
 /// the completeness of use_origins, define_origins, and aliases is untrusted.
-pub fn project(mir: &MirFunction, evidence: &Evidence) -> Result<DiagnosticProjection, BridgeError> {
+pub fn project(
+    mir: &MirFunction,
+    evidence: &Evidence,
+) -> Result<DiagnosticProjection, BridgeError> {
     // Enforce typed MIR contract, source ID inventory, effect agreement, and
     // claimed provenance first. This does not authenticate the producer.
     mir_v1::validate_and_lower(mir).map_err(BridgeError::Mir)?;
     let instruction_count: usize = mir.blocks.iter().map(|b| b.instructions.len()).sum();
-    if instruction_count == 0 || instruction_count > 4096
+    if instruction_count == 0
+        || instruction_count > 4096
         || instruction_count != evidence.instruction_facts.len()
         || evidence.phi_edges.len() > 16_384
     {
@@ -66,7 +70,11 @@ pub fn project(mir: &MirFunction, evidence: &Evidence) -> Result<DiagnosticProje
     }
     let mut facts_by_instruction = BTreeMap::new();
     for facts in &evidence.instruction_facts {
-        if facts.instruction_id == 0 || facts_by_instruction.insert(facts.instruction_id, facts).is_some() {
+        if facts.instruction_id == 0
+            || facts_by_instruction
+                .insert(facts.instruction_id, facts)
+                .is_some()
+        {
             return Err(BridgeError::Invalid("E_DIAGNOSTIC_DUPLICATE_FACT"));
         }
     }
@@ -77,13 +85,20 @@ pub fn project(mir: &MirFunction, evidence: &Evidence) -> Result<DiagnosticProje
     let mut id = 1u32;
     for block in &mir.blocks {
         if block.instructions.is_empty() || block_first.insert(block.id, id).is_some() {
-            return Err(BridgeError::Invalid("E_DIAGNOSTIC_EMPTY_OR_DUPLICATE_BLOCK"));
+            return Err(BridgeError::Invalid(
+                "E_DIAGNOSTIC_EMPTY_OR_DUPLICATE_BLOCK",
+            ));
         }
         for instruction in &block.instructions {
-            if instruction_to_point.insert(instruction.instruction_id, id).is_some() {
+            if instruction_to_point
+                .insert(instruction.instruction_id, id)
+                .is_some()
+            {
                 return Err(BridgeError::Invalid("E_DIAGNOSTIC_DUPLICATE_INSTRUCTION"));
             }
-            id = id.checked_add(1).ok_or(BridgeError::Invalid("E_DIAGNOSTIC_ID_OVERFLOW"))?;
+            id = id
+                .checked_add(1)
+                .ok_or(BridgeError::Invalid("E_DIAGNOSTIC_ID_OVERFLOW"))?;
         }
         block_last.insert(block.id, id - 1);
     }
@@ -114,7 +129,11 @@ pub fn project(mir: &MirFunction, evidence: &Evidence) -> Result<DiagnosticProje
             } else {
                 let mut successors = Vec::with_capacity(block.successors.len());
                 for &succ in &block.successors {
-                    successors.push(*block_first.get(&succ).ok_or(BridgeError::Invalid("E_DIAGNOSTIC_CFG"))?);
+                    successors.push(
+                        *block_first
+                            .get(&succ)
+                            .ok_or(BridgeError::Invalid("E_DIAGNOSTIC_CFG"))?,
+                    );
                 }
                 successors
             };
@@ -133,13 +152,19 @@ pub fn project(mir: &MirFunction, evidence: &Evidence) -> Result<DiagnosticProje
                 if origin == 0 || !local_uses.insert(origin) {
                     return Err(BridgeError::Invalid("E_DIAGNOSTIC_ORIGIN_USE"));
                 }
-                uses.push(OriginUse { point: point_id, origin });
+                uses.push(OriginUse {
+                    point: point_id,
+                    origin,
+                });
             }
             for &origin in &row.define_origins {
                 if origin == 0 || !local_definitions.insert(origin) {
                     return Err(BridgeError::Invalid("E_DIAGNOSTIC_ORIGIN_DEF"));
                 }
-                definitions.push(Definition { point: point_id, origin });
+                definitions.push(Definition {
+                    point: point_id,
+                    origin,
+                });
             }
             match instruction.operation {
                 Op::Init { .. } => {
@@ -148,7 +173,9 @@ pub fn project(mir: &MirFunction, evidence: &Evidence) -> Result<DiagnosticProje
                     }
                 }
                 Op::Borrow { loan, .. } => {
-                    let origin = row.borrow_origin.ok_or(BridgeError::Invalid("E_DIAGNOSTIC_BORROW_ORIGIN"))?;
+                    let origin = row
+                        .borrow_origin
+                        .ok_or(BridgeError::Invalid("E_DIAGNOSTIC_BORROW_ORIGIN"))?;
                     if origin == 0 {
                         return Err(BridgeError::Invalid("E_DIAGNOSTIC_BORROW_ORIGIN"));
                     }
@@ -187,19 +214,36 @@ pub fn project(mir: &MirFunction, evidence: &Evidence) -> Result<DiagnosticProje
     }
     let mut phi_inputs = Vec::new();
     for &phi in &evidence.phi_edges {
-        let predecessor = *instruction_to_point.get(&phi.predecessor_instruction_id)
+        let predecessor = *instruction_to_point
+            .get(&phi.predecessor_instruction_id)
             .ok_or(BridgeError::Invalid("E_DIAGNOSTIC_PHI_INSTRUCTION"))?;
-        let successor = *instruction_to_point.get(&phi.successor_instruction_id)
+        let successor = *instruction_to_point
+            .get(&phi.successor_instruction_id)
             .ok_or(BridgeError::Invalid("E_DIAGNOSTIC_PHI_INSTRUCTION"))?;
         if !block_last.values().any(|&last| last == predecessor)
             || !block_first.values().any(|&first| first == successor)
         {
             return Err(BridgeError::Invalid("E_DIAGNOSTIC_PHI_BOUNDARY"));
         }
-        phi_inputs.push(PhiInput { predecessor, successor, source: phi.source, destination: phi.destination });
+        phi_inputs.push(PhiInput {
+            predecessor,
+            successor,
+            source: phi.source,
+            destination: phi.destination,
+        });
     }
-    let entry = *block_first.get(&mir.entry).ok_or(BridgeError::Invalid("E_DIAGNOSTIC_CFG_ENTRY"))?;
-    let input = Input { template: Facts { entry, points }, uses, definitions, phi_inputs };
+    let entry = *block_first
+        .get(&mir.entry)
+        .ok_or(BridgeError::Invalid("E_DIAGNOSTIC_CFG_ENTRY"))?;
+    let input = Input {
+        template: Facts { entry, points },
+        uses,
+        definitions,
+        phi_inputs,
+    };
     let report = analyze_ssa(&input).map_err(BridgeError::Ssa)?;
-    Ok(DiagnosticProjection { instruction_to_point, report })
+    Ok(DiagnosticProjection {
+        instruction_to_point,
+        report,
+    })
 }
