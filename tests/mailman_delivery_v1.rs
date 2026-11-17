@@ -8,6 +8,7 @@ fn node(id: u32, children: &[u32]) -> Allocation {
     Allocation {
         id,
         owner_domain: 7,
+        allocation_generation: 1,
         mutable: true,
         sendable: true,
         deep_copyable: true,
@@ -53,8 +54,8 @@ fn err(graph: &GraphInventory, req: &DeliveryRequest) -> Error {
 #[test]
 fn unique_cyclic_graph_with_repeated_internal_aliases_can_transfer() {
     let proof = verify_delivery(&cyclic(), &request(DeliveryMode::Transfer)).unwrap();
-    assert_eq!(proof.selected, SelectedDelivery::Transfer);
-    assert_eq!(proof.reachable, vec![1, 2, 3]);
+    assert_eq!(proof.selected(), SelectedDelivery::Transfer);
+    assert_eq!(proof.reachable(), vec![1, 2, 3]);
 }
 
 #[test]
@@ -123,7 +124,7 @@ fn reject_zero_duplicate_and_budgeted_graph_identifiers() {
 }
 
 #[test]
-fn escaped_nested_alias_blocks_transfer_and_elision_but_not_actual_deep_copy() {
+fn untracked_nested_alias_blocks_transfer_and_copy_until_guarded() {
     let mut graph = cyclic();
     graph.nodes[2].escaped_aliases = 1;
     assert_eq!(
@@ -135,8 +136,8 @@ fn escaped_nested_alias_blocks_transfer_and_elision_but_not_actual_deep_copy() {
     req.source_observable_after_send = false;
     req.copy_identity_or_hooks_observable = false;
     assert_eq!(
-        verify_delivery(&graph, &req).unwrap().selected,
-        SelectedDelivery::DeepCopy
+        err(&graph, &req),
+        Error::OwnershipNotExclusive
     );
 }
 
@@ -164,7 +165,7 @@ fn read_lease_allows_existing_readers_but_never_a_writer() {
     assert_eq!(
         verify_delivery(&graph, &request(DeliveryMode::ReadLease))
             .unwrap()
-            .selected,
+            .selected(),
         SelectedDelivery::ReadLease
     );
     graph.nodes[0].active_writer = true;
@@ -185,7 +186,7 @@ fn lease_requires_scope_and_explicit_pinned_suspension_proof() {
     assert_eq!(err(&graph, &req), Error::LeaseSuspendUnproven);
     req.pinned_lease_proven = true;
     assert_eq!(
-        verify_delivery(&graph, &req).unwrap().selected,
+        verify_delivery(&graph, &req).unwrap().selected(),
         SelectedDelivery::ReadLease
     );
 }
@@ -214,7 +215,7 @@ fn cross_heap_handoff_cannot_claim_physical_zero_copy() {
     let mut req = request(DeliveryMode::DeepCopy);
     req.destination_domain = 13;
     assert_eq!(
-        verify_delivery(&graph, &req).unwrap().selected,
+        verify_delivery(&graph, &req).unwrap().selected(),
         SelectedDelivery::DeepCopy
     );
 }
@@ -250,7 +251,7 @@ fn frozen_share_requires_all_descendants_frozen_and_sync() {
     assert_eq!(
         verify_delivery(&graph, &request(DeliveryMode::FrozenShare))
             .unwrap()
-            .selected,
+            .selected(),
         SelectedDelivery::FrozenShare
     );
     graph.nodes[2].sync = false;
@@ -266,22 +267,22 @@ fn copy_elision_requires_dead_source_and_no_observable_copy_semantics() {
     let mut req = request(DeliveryMode::DeepCopy);
     req.allow_elision = true;
     assert_eq!(
-        verify_delivery(&graph, &req).unwrap().selected,
+        verify_delivery(&graph, &req).unwrap().selected(),
         SelectedDelivery::DeepCopy
     );
     req.source_observable_after_send = false;
     assert_eq!(
-        verify_delivery(&graph, &req).unwrap().selected,
+        verify_delivery(&graph, &req).unwrap().selected(),
         SelectedDelivery::DeepCopy
     );
     req.copy_identity_or_hooks_observable = false;
     assert_eq!(
-        verify_delivery(&graph, &req).unwrap().selected,
+        verify_delivery(&graph, &req).unwrap().selected(),
         SelectedDelivery::ElidedDeepCopy
     );
     req.destination_domain = 13;
     assert_eq!(
-        verify_delivery(&graph, &req).unwrap().selected,
+        verify_delivery(&graph, &req).unwrap().selected(),
         SelectedDelivery::DeepCopy
     );
 }
@@ -307,7 +308,7 @@ fn invalid_actor_and_ticket_generations_are_fail_closed() {
 fn mailbox_prepare_commit_abort_are_single_use_and_bounded() {
     let graph = cyclic();
     let proof = verify_delivery(&graph, &request(DeliveryMode::Transfer)).unwrap();
-    let mut ledger = DeliveryLedger::new(1);
+    let mut ledger = DeliveryLedger::new(1, 12);
     ledger.prepare(&proof).unwrap();
     assert_eq!(ledger.counts(), (1, 0));
     assert_eq!(ledger.prepare(&proof), Err(Error::DuplicateTicket));
@@ -345,11 +346,11 @@ fn mailbox_prepare_commit_abort_are_single_use_and_bounded() {
 fn reserve_full_mailbox_before_copy_and_do_not_consume_ticket() {
     let graph = cyclic();
     let proof = verify_delivery(&graph, &request(DeliveryMode::DeepCopy)).unwrap();
-    let mut ledger = DeliveryLedger::new(0);
+    let mut ledger = DeliveryLedger::new(0, 12);
     assert_eq!(ledger.prepare(&proof), Err(Error::MailboxFull));
     assert_eq!(ledger.counts(), (0, 0));
 
-    let mut ledger = DeliveryLedger::new(1);
+    let mut ledger = DeliveryLedger::new(1, 12);
     ledger.prepare(&proof).unwrap();
     let mut other = request(DeliveryMode::DeepCopy);
     other.ticket = 10;
@@ -364,7 +365,7 @@ fn reserve_full_mailbox_before_copy_and_do_not_consume_ticket() {
 fn tracked_lease_cannot_retire_before_all_derivative_users_quiesce() {
     let graph = cyclic();
     let proof = verify_delivery(&graph, &request(DeliveryMode::ReadLease)).unwrap();
-    let mut ledger = DeliveryLedger::new(2);
+    let mut ledger = DeliveryLedger::new(2, 12);
     ledger.prepare(&proof).unwrap();
     assert_eq!(ledger.commit(9, 5), Ok(false));
     ledger.enter_lease_user(9, 5).unwrap();
@@ -373,6 +374,8 @@ fn tracked_lease_cannot_retire_before_all_derivative_users_quiesce() {
     ledger.exit_lease_user(9, 5).unwrap();
     assert_eq!(ledger.finish(9, 5), Err(Error::LeaseStillActive));
     ledger.exit_lease_user(9, 5).unwrap();
+    assert_eq!(ledger.finish(9, 5), Err(Error::LeaseStillActive));
+    ledger.release_receiver_lease(9, 5).unwrap();
     ledger.finish(9, 5).unwrap();
     assert_eq!(ledger.counts(), (0, 0));
     assert_eq!(ledger.exit_lease_user(9, 5), Err(Error::UnknownTicket));
@@ -382,7 +385,7 @@ fn tracked_lease_cannot_retire_before_all_derivative_users_quiesce() {
 fn rejects_loan_user_on_non_loan_delivery() {
     let graph = cyclic();
     let proof = verify_delivery(&graph, &request(DeliveryMode::DeepCopy)).unwrap();
-    let mut ledger = DeliveryLedger::new(1);
+    let mut ledger = DeliveryLedger::new(1, 12);
     ledger.prepare(&proof).unwrap();
     ledger.commit(9, 5).unwrap();
     assert_eq!(
@@ -394,7 +397,7 @@ fn rejects_loan_user_on_non_loan_delivery() {
 
 #[test]
 fn unknown_ticket_and_double_settlement_never_mutate_counts() {
-    let mut ledger = DeliveryLedger::new(1);
+    let mut ledger = DeliveryLedger::new(1, 12);
     assert_eq!(ledger.commit(9, 4), Err(Error::UnknownTicket));
     assert_eq!(ledger.abort(9, 4), Err(Error::UnknownTicket));
     assert_eq!(ledger.finish(9, 4), Err(Error::UnknownTicket));
@@ -414,16 +417,18 @@ fn simultaneous_lease_requests_are_region_wide_and_conflict_before_admission() {
     let read_two = verify_delivery(&graph, &read_two).unwrap();
     let write = verify_delivery(&graph, &write).unwrap();
 
-    let mut ledger = DeliveryLedger::new(3);
+    let mut ledger = DeliveryLedger::new(3, 12);
     ledger.prepare(&read_one).unwrap();
     ledger.prepare(&read_two).unwrap();
     assert_eq!(ledger.prepare(&write), Err(Error::LeaseConflict));
     ledger.commit(9, 5).unwrap();
     ledger.abort(10, 5).unwrap();
     assert_eq!(ledger.prepare(&write), Err(Error::LeaseConflict));
+    ledger.release_receiver_lease(9, 5).unwrap();
     ledger.finish(9, 5).unwrap();
     ledger.prepare(&write).unwrap();
     assert_eq!(ledger.commit(11, 5), Ok(false));
+    ledger.release_receiver_lease(11, 5).unwrap();
     ledger.finish(11, 5).unwrap();
 }
 
@@ -438,7 +443,7 @@ fn pending_transfer_excludes_leases_and_duplicate_copy_readers() {
     copy.ticket = 13;
     let copy = verify_delivery(&graph, &copy).unwrap();
 
-    let mut ledger = DeliveryLedger::new(3);
+    let mut ledger = DeliveryLedger::new(3, 12);
     ledger.prepare(&transfer).unwrap();
     assert_eq!(ledger.prepare(&read), Err(Error::LeaseConflict));
     assert_eq!(ledger.prepare(&copy), Err(Error::LeaseConflict));
@@ -449,6 +454,7 @@ fn pending_transfer_excludes_leases_and_duplicate_copy_readers() {
     ledger.finish(13, 5).unwrap();
     ledger.finish(12, 5).unwrap_err(); // not yet committed
     ledger.commit(12, 5).unwrap();
+    ledger.release_receiver_lease(12, 5).unwrap();
     ledger.finish(12, 5).unwrap();
 }
 
@@ -460,7 +466,7 @@ fn committed_transfer_invalidates_stale_source_proofs() {
     second.ticket = 14;
     let second = verify_delivery(&graph, &second).unwrap();
 
-    let mut ledger = DeliveryLedger::new(3);
+    let mut ledger = DeliveryLedger::new(3, 12);
     ledger.prepare(&proof).unwrap();
     ledger.commit(9, 5).unwrap();
     ledger.finish(9, 5).unwrap();
@@ -471,7 +477,7 @@ fn committed_transfer_invalidates_stale_source_proofs() {
 fn ticket_epochs_must_increase_after_prior_aborted_ticket() {
     let graph = cyclic();
     let first = verify_delivery(&graph, &request(DeliveryMode::ReadLease)).unwrap();
-    let mut ledger = DeliveryLedger::new(2);
+    let mut ledger = DeliveryLedger::new(2, 12);
     ledger.prepare(&first).unwrap();
     ledger.abort(9, 5).unwrap();
 
