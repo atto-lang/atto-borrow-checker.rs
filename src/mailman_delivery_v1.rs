@@ -210,9 +210,10 @@ pub fn verify_delivery(
                 && !node.active_writer
         }
     });
-    let no_outstanding_loans = inventory.nodes.iter().all(|node| {
-        node.active_readers == 0 && !node.active_writer
-    });
+    let no_outstanding_loans = inventory
+        .nodes
+        .iter()
+        .all(|node| node.active_readers == 0 && !node.active_writer);
     let selected = match request.mode {
         DeliveryMode::Transfer => {
             if !same_domain {
@@ -232,12 +233,16 @@ pub fn verify_delivery(
             }
             if inventory.nodes.iter().any(|node| {
                 node.mutable
-                    && (node.owner_domain != request.source_domain
-                        || node.escaped_aliases != 0)
-            }) && !request.scoped_lease_proven {
+                    && (node.owner_domain != request.source_domain || node.escaped_aliases != 0)
+            }) && !request.scoped_lease_proven
+            {
                 return Err(Error::LeaseScopeRequired);
             }
-            if inventory.nodes.iter().any(|node| node.mutable && !node.deep_copyable) {
+            if inventory
+                .nodes
+                .iter()
+                .any(|node| node.mutable && !node.deep_copyable)
+            {
                 return Err(Error::CopyWitnessRequired);
             }
             if request.allow_elision
@@ -252,7 +257,11 @@ pub fn verify_delivery(
             }
         }
         DeliveryMode::FrozenShare => {
-            if inventory.nodes.iter().any(|node| node.mutable || !node.frozen || !node.sync) {
+            if inventory
+                .nodes
+                .iter()
+                .any(|node| node.mutable || !node.frozen || !node.sync)
+            {
                 return Err(Error::FrozenSyncRequired);
             }
             if !same_domain {
@@ -273,8 +282,7 @@ pub fn verify_delivery(
             if inventory.nodes.iter().any(|node| {
                 (node.mutable
                     && (node.owner_domain != request.source_domain || node.escaped_aliases != 0))
-                    || (node.owner_domain != request.source_domain
-                        && (!node.frozen || !node.sync))
+                    || (node.owner_domain != request.source_domain && (!node.frozen || !node.sync))
             }) {
                 return Err(Error::OwnershipNotExclusive);
             }
@@ -328,11 +336,17 @@ fn is_writer(mode: SelectedDelivery) -> bool {
 }
 
 fn is_reader(mode: SelectedDelivery) -> bool {
-    matches!(mode, SelectedDelivery::DeepCopy | SelectedDelivery::ReadLease)
+    matches!(
+        mode,
+        SelectedDelivery::DeepCopy | SelectedDelivery::ReadLease
+    )
 }
 
 fn retains_guard_after_commit(mode: SelectedDelivery) -> bool {
-    !matches!(mode, SelectedDelivery::DeepCopy | SelectedDelivery::FrozenShare)
+    !matches!(
+        mode,
+        SelectedDelivery::DeepCopy | SelectedDelivery::FrozenShare
+    )
 }
 
 /// Bounded *host model* for Mailman escrow/admission, not a physical mailbox.
@@ -476,7 +490,10 @@ impl DeliveryLedger {
         ) {
             return Err(Error::LeaseScopeRequired);
         }
-        value.active_users = value.active_users.checked_add(1).ok_or(Error::TicketLimit)?;
+        value.active_users = value
+            .active_users
+            .checked_add(1)
+            .ok_or(Error::TicketLimit)?;
         Ok(())
     }
 
