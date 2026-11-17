@@ -8,6 +8,10 @@ Compiler-local type inference, ownership state changes and CFG construction can 
 
 See [hybrid integration design](docs/HYBRID_COMPILER_INTEGRATION.md).
 
+## Ownership-bang master verification (draft V1)
+
+The new `ownership_bang_v1` source-census-to-MIR bridge checks typed `copy!`, `take!`, `borrow!`, `borrow! mut`, and immutable/frozen `share!` operations against the same canonical V0 ownership transitions. It includes loan-bound reads and detached Copy-through semantics, and rejects borrowed/actor-state Share authority laundering. **Compilers keep their native same-pass checkers.** The Rust oracle is a differential/strict verifier, not an obligatory per-expression process. See [ownership-bang master contract](docs/OWNERSHIP_BANG_MASTER_V1.md). No backend guest parity is claimed.
+
 ## Current implementation
 
 `actor_arena_ref32_v1` models nonzero 32-bit arena-relative offsets, per-actor/arena/generation identity, allocation extents and alignment, overflow-denial, and stale-retirement rejection. Its independent Rust tests are **model-only**: there is no actual native heap, pointer, physical shared-memory guard, compiler lowering, or quiescence proof in this module. Backend integrations must retain arena/domain/generation metadata outside the 32-bit guest offset, verify each access, and separately enforce loan and physical-retirement rules.
