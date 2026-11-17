@@ -29,11 +29,7 @@ fn graph(offset: u32, generation: u64) -> GraphInventory {
     };
     GraphInventory {
         root: 1 + offset,
-        nodes: vec![
-            node(1, vec![2, 2]),
-            node(2, vec![1, 3]),
-            node(3, vec![]),
-        ],
+        nodes: vec![node(1, vec![2, 2]), node(2, vec![1, 3]), node(3, vec![])],
         expected_reachable: vec![1 + offset, 2 + offset, 3 + offset],
     }
 }
@@ -80,13 +76,22 @@ fn function(ticket: u32) -> MirFunction {
             MirBlock {
                 id: 0,
                 instructions: vec![
-                    instruction(1, Effect::Ownership, Op::Init {
-                        owner: 1,
-                        traits: Traits { is_copy: false, is_send: true },
-                    }),
-                    instruction(2, Effect::ActorBoundary, Op::ActorSendPrepare {
-                        owner: 1, ticket,
-                    }),
+                    instruction(
+                        1,
+                        Effect::Ownership,
+                        Op::Init {
+                            owner: 1,
+                            traits: Traits {
+                                is_copy: false,
+                                is_send: true,
+                            },
+                        },
+                    ),
+                    instruction(
+                        2,
+                        Effect::ActorBoundary,
+                        Op::ActorSendPrepare { owner: 1, ticket },
+                    ),
                 ],
                 successors: vec![1, 2],
             },
@@ -126,7 +131,12 @@ fn census(program: &MirFunction, ticket: u32) -> CompilerSendCensus {
 
 fn verify(ticket: u32, graph: &GraphInventory) -> Result<CompilerBoundTransfer, Error> {
     let program = function(ticket);
-    verify_compiler_transfer(&program, &census(&program, ticket), graph, &request(ticket.into()))
+    verify_compiler_transfer(
+        &program,
+        &census(&program, ticket),
+        graph,
+        &request(ticket.into()),
+    )
 }
 
 #[test]
@@ -144,50 +154,45 @@ fn rejects_missing_duplicate_mismatched_and_overbudget_source_sites() {
     let mut census = census(&program, 9);
     census.source_transfer_sites.clear();
     assert_eq!(
-        verify_compiler_transfer(&program, &census, &graph(0, 1), &request(9))
-            .unwrap_err(),
+        verify_compiler_transfer(&program, &census, &graph(0, 1), &request(9)).unwrap_err(),
         Error::InvalidSite
     );
     census = census(&program, 9);
-    census.source_transfer_sites.push(census.source_transfer_sites[0].clone());
+    census
+        .source_transfer_sites
+        .push(census.source_transfer_sites[0].clone());
     assert_eq!(
-        verify_compiler_transfer(&program, &census, &graph(0, 1), &request(9))
-            .unwrap_err(),
+        verify_compiler_transfer(&program, &census, &graph(0, 1), &request(9)).unwrap_err(),
         Error::DuplicateSite
     );
     census = census(&program, 9);
     census.source_transfer_sites[0].source_node_id = 999;
     assert_eq!(
-        verify_compiler_transfer(&program, &census, &graph(0, 1), &request(9))
-            .unwrap_err(),
+        verify_compiler_transfer(&program, &census, &graph(0, 1), &request(9)).unwrap_err(),
         Error::SendSiteMismatch
     );
     census = census(&program, 9);
     census.source_transfer_sites[0].ticket = 10;
     assert_eq!(
-        verify_compiler_transfer(&program, &census, &graph(0, 1), &request(9))
-            .unwrap_err(),
+        verify_compiler_transfer(&program, &census, &graph(0, 1), &request(9)).unwrap_err(),
         Error::SendSiteMismatch
     );
     census = census(&program, 9);
     census.source_transfer_sites[0].instruction_id = 300;
     assert_eq!(
-        verify_compiler_transfer(&program, &census, &graph(0, 1), &request(9))
-            .unwrap_err(),
+        verify_compiler_transfer(&program, &census, &graph(0, 1), &request(9)).unwrap_err(),
         Error::IncompleteCensus
     );
     census = census(&program, 9);
     census.source_transfer_sites[0].owner = 2;
     assert_eq!(
-        verify_compiler_transfer(&program, &census, &graph(0, 1), &request(9))
-            .unwrap_err(),
+        verify_compiler_transfer(&program, &census, &graph(0, 1), &request(9)).unwrap_err(),
         Error::SendSiteMismatch
     );
     census = census(&program, 9);
     census.source_transfer_sites[0].owner = 0;
     assert_eq!(
-        verify_compiler_transfer(&program, &census, &graph(0, 1), &request(9))
-            .unwrap_err(),
+        verify_compiler_transfer(&program, &census, &graph(0, 1), &request(9)).unwrap_err(),
         Error::InvalidSite
     );
     census = census(&program, 9);
@@ -200,8 +205,7 @@ fn rejects_missing_duplicate_mismatched_and_overbudget_source_sites() {
         })
         .collect();
     assert_eq!(
-        verify_compiler_transfer(&program, &census, &graph(0, 1), &request(9))
-            .unwrap_err(),
+        verify_compiler_transfer(&program, &census, &graph(0, 1), &request(9)).unwrap_err(),
         Error::InvalidSite
     );
 }
@@ -231,7 +235,11 @@ fn rejects_wrong_version_producer_and_unauthenticated_mir_claims() {
     wrong_effect.blocks[0].instructions[1].effect = Effect::Ownership;
     assert!(matches!(
         verify_compiler_transfer(
-            &wrong_effect, &census(&wrong_effect, 9), &graph(0, 1), &request(9)),
+            &wrong_effect,
+            &census(&wrong_effect, 9),
+            &graph(0, 1),
+            &request(9)
+        ),
         Err(Error::MirInvalid(_))
     ));
 }
@@ -241,20 +249,29 @@ fn missing_rollback_path_or_unmodeled_actor_operation_fails_closed() {
     let mut program = function(9);
     program.blocks[2].instructions.remove(0);
     program.blocks[2].instructions.remove(0);
-    program.blocks[2].instructions.push(instruction(5, Effect::Control, Op::Return));
+    program.blocks[2]
+        .instructions
+        .push(instruction(5, Effect::Control, Op::Return));
     program.expected_instruction_ids = (1..=5).collect();
-    assert!(verify_compiler_transfer(
-        &program, &census(&program, 9), &graph(0, 1), &request(9)
-    ).is_err());
+    assert!(
+        verify_compiler_transfer(&program, &census(&program, 9), &graph(0, 1), &request(9))
+            .is_err()
+    );
 
     let mut unsupported = function(9);
     unsupported.blocks[0].instructions.push(instruction(
-        8, Effect::ActorBoundary, Op::ActorHopBorrow { owner: 1 },
+        8,
+        Effect::ActorBoundary,
+        Op::ActorHopBorrow { owner: 1 },
     ));
     unsupported.expected_instruction_ids.push(8);
     assert!(verify_compiler_transfer(
-        &unsupported, &census(&unsupported, 9), &graph(0, 1), &request(9)
-    ).is_err());
+        &unsupported,
+        &census(&unsupported, 9),
+        &graph(0, 1),
+        &request(9)
+    )
+    .is_err());
 }
 
 #[test]
@@ -414,7 +431,9 @@ fn invalid_broker_domain_epoch_and_mailman_ids_fail_closed() {
         r.source_domain = 8;
         r.destination_domain = 8;
         let mut g = graph(0, 1);
-        for node in &mut g.nodes { node.owner_domain = 8; }
+        for node in &mut g.nodes {
+            node.owner_domain = 8;
+        }
         let program = function(11);
         verify_compiler_transfer(&program, &census(&program, 11), &g, &r).unwrap()
     };
@@ -453,7 +472,11 @@ fn synchronized_multi_mailman_contention_admits_only_one_transfer() {
         1
     );
     let (winner, ticket, _) = results.iter().find(|item| item.2.is_ok()).unwrap();
-    broker.lock().unwrap().abort(*winner, u64::from(*ticket), 5).unwrap();
+    broker
+        .lock()
+        .unwrap()
+        .abort(*winner, u64::from(*ticket), 5)
+        .unwrap();
     let guard = broker.lock().unwrap();
     assert_eq!(guard.counts(1), Some((0, 0)));
     assert_eq!(guard.counts(2), Some((0, 0)));
