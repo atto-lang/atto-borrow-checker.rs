@@ -778,5 +778,10 @@ pub mod mir_v1;
 /// runtime remain separate and must be independently verified.
 pub mod copy_graph_v1;
 
+/// Model-only bounded graph copy context with per-invocation identity memo,
+/// base/private field traversal and transactional failed-copy cleanup.
+/// Not linked to production guest-Wasm or actor mailboxes.
+pub mod graph_copy_runtime_v1;
+
 /// Explicit field-projection/loop model; not an implicit V0 or MIR upgrade.
 pub mod cyclic_v1;
