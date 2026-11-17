@@ -66,6 +66,9 @@ pub struct BangSite {
     /// Only a proven addressable, writable place can be mutably borrowed.
     /// This is claimed by the native type/place checker, not inferred here.
     pub place_is_writable: bool,
+    /// Proven by the native type/escape checker: copying through this loan
+    /// produces an independent owned value with no borrowed referents.
+    pub detached_copy_proven: bool,
 }
 
 /// Source-owned census and mapping contract. An independently generated
@@ -102,6 +105,9 @@ fn expected_operation(site: &BangSite) -> Result<Op, BangError> {
         return Err(invalid("E_BANG_AUTHORITY"));
     }
     let owned = site.source_authority == SourceAuthority::Owned;
+    if site.detached_copy_proven && (site.verb != Verb::Copy || owned) {
+        return Err(invalid("E_BANG_UNUSED_DETACH_PROOF"));
+    }
     match site.verb {
         Verb::Copy => {
             if missing_or_extra(site, true, !owned, false) {
@@ -118,6 +124,7 @@ fn expected_operation(site: &BangSite) -> Result<Op, BangError> {
                     owner: site.from,
                     loan: site.loan.ok_or(invalid("E_BANG_OPERANDS"))?,
                     into,
+                    detached_proven: site.detached_copy_proven,
                 })
             }
         }
