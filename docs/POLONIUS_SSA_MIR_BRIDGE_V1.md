@@ -35,3 +35,34 @@ cargo test --all-targets --locked --release
 ```
 
 No existing V0/cyclic acceptance rules are changed by this PR.
+
+
+## Audit hardening: bounded evidence and return provenance
+
+The diagnostic bridge rejects an evidence array whose **total nested**
+`use_origins` + `define_origins` + phi-edge count exceeds 100,000,
+*before* the source inventory is cloned or its nested facts are processed.
+It also bounds the product of all issued loans and all Write/Drop operations,
+because the conservative unknown-alias strategy expands each destructive
+operation into one invalidation per loan. It rejects more than 2,048
+distinct loans. These limits prevent caller-created fact amplification and
+are intentional fail-closed behavior, not a performance claim.
+
+When any MIR Borrow is issued, a terminal Return must supply an origin
+witness that actually appears on a MIR Borrow. A phi destination may be used
+as a borrowed-return witness only when **every distinct incoming phi source**
+can be transitively traced back to a MIR Borrow. Merely supplying a
+different, nominally well-formed SSA origin cannot stand in for the
+returned loan. This is internal consistency, not authentication of the
+origin-to-owner, type, alias or reference-lifetime relationship.
+
+An SSA phi at the function's entry point is rejected: the ordinary CFG
+tracks only explicit backedges and cannot represent the separate implicit
+caller's incoming edge, so an entry phi might otherwise be accepted with an
+incomplete operand census. Compilers must represent such a loop header at
+a non-entry block with a complete incoming-edge inventory.
+
+These checks do not make caller-supplied `InstructionFacts` trustworthy.
+A real Atto compiler still needs an independently checked typed-MIR and
+emitted-op provenance/use census, with alias, cancellation, exception, and
+actor boundaries. See atto-lang/atto-source.rs#271.
