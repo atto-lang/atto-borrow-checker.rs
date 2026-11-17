@@ -40,7 +40,9 @@ pub fn verify_dual_profile(
     resolver: &mut dyn EvidenceResolver,
 ) -> Result<DualProof, DualError> {
     let unsupported = |block, operation, code| DualError::Unsupported {
-        block, operation, code,
+        block,
+        operation,
+        code,
     };
 
     let mut roots = Vec::new();
