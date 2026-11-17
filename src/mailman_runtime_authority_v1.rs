@@ -177,12 +177,7 @@ impl DomainAuthority {
         if map.len() >= MAX_DOMAINS {
             return Err(Error::AllocationBudget);
         }
-        let broker = SharedTransferBroker::new(
-            domain,
-            destination.generation,
-            capacity,
-            &quotas,
-        )?;
+        let broker = SharedTransferBroker::new(domain, destination.generation, capacity, &quotas)?;
         let shared = Arc::new(Mutex::new(State {
             domain,
             destination,
@@ -281,7 +276,12 @@ impl DomainAuthority {
             if entry.epoch != stamp.generation {
                 return Err(Error::StaleAllocation);
             }
-            if entry.owner != Some(Owner { actor, slot: owner_slot }) {
+            if entry.owner
+                != Some(Owner {
+                    actor,
+                    slot: owner_slot,
+                })
+            {
                 return Err(Error::OwnerMismatch);
             }
         }
@@ -330,10 +330,12 @@ impl DomainAuthority {
             if allocated.epoch != key.generation() {
                 return Err(Error::StaleAllocation);
             }
-            if allocated.owner != Some(Owner {
-                actor: source,
-                slot: proof.owner(),
-            }) {
+            if allocated.owner
+                != Some(Owner {
+                    actor: source,
+                    slot: proof.owner(),
+                })
+            {
                 return Err(Error::OwnerMismatch);
             }
             if state.reserved.contains(&key.id()) {
@@ -376,7 +378,10 @@ impl DomainAuthority {
     }
 
     /// Inspection only; it never conveys ownership or access to an object.
-    pub fn owner_of(&self, stamp: AllocationStamp) -> Result<Option<(ActorIdentity, OwnerId)>, Error> {
+    pub fn owner_of(
+        &self,
+        stamp: AllocationStamp,
+    ) -> Result<Option<(ActorIdentity, OwnerId)>, Error> {
         let state = self.shared.lock().map_err(|_| Error::Poisoned)?;
         let Some(entry) = state.live.get(&stamp.id) else {
             return Ok(None);
@@ -399,7 +404,8 @@ impl State {
         if grant.phase != Phase::Pending {
             return Err(Error::GrantState);
         }
-        self.broker.abort(grant.mailman, grant.ticket, grant.ticket_generation)?;
+        self.broker
+            .abort(grant.mailman, grant.ticket, grant.ticket_generation)?;
         for stamp in &grant.allocations {
             self.reserved.remove(&stamp.id);
         }
@@ -426,7 +432,8 @@ impl State {
         }
         // Broker commit consumes sender ownership in its graph ledger first;
         // registry then places nodes in-flight and inaccessible to both actors.
-        self.broker.commit(grant.mailman, grant.ticket, grant.ticket_generation)?;
+        self.broker
+            .commit(grant.mailman, grant.ticket, grant.ticket_generation)?;
         for stamp in &grant.allocations {
             if let Some(entry) = self.live.get_mut(&stamp.id) {
                 entry.owner = None;
@@ -454,7 +461,8 @@ impl State {
                 return Err(Error::GrantState);
             }
         }
-        self.broker.finish(grant.mailman, grant.ticket, grant.ticket_generation)?;
+        self.broker
+            .finish(grant.mailman, grant.ticket, grant.ticket_generation)?;
         let destination = grant.destination;
         for stamp in &grant.allocations {
             if let Some(entry) = self.live.get_mut(&stamp.id) {
