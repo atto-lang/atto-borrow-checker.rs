@@ -13,6 +13,7 @@ pub mod actor_state_guard_v1;
 pub mod actor_state_runtime_v1;
 pub mod polonius_facts_v1;
 pub mod polonius_ssa_v1;
+pub mod mir_loan_census_v1;
 pub mod mir_lifetime_census_v1;
 
 pub type OwnerId = u32;
