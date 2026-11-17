@@ -210,10 +210,7 @@ fn cross_heap_handoff_cannot_claim_physical_zero_copy() {
     }
     let mut share = request(DeliveryMode::FrozenShare);
     share.destination_domain = 13;
-    assert_eq!(
-        err(&frozen, &share),
-        Error::CrossDomainZeroCopy
-    );
+    assert_eq!(err(&frozen, &share), Error::CrossDomainZeroCopy);
     let mut req = request(DeliveryMode::DeepCopy);
     req.destination_domain = 13;
     assert_eq!(
