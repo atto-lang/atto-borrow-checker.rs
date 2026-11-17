@@ -90,7 +90,12 @@ pub enum BangError {
     Mir(MirError),
 }
 
-fn missing_or_extra(site: &BangSite, needs_into: bool, needs_loan: bool, needs_region: bool) -> bool {
+fn missing_or_extra(
+    site: &BangSite,
+    needs_into: bool,
+    needs_loan: bool,
+    needs_region: bool,
+) -> bool {
     site.into.is_some() != needs_into
         || site.loan.is_some() != needs_loan
         || site.region.is_some() != needs_region
@@ -104,7 +109,10 @@ fn expected_operation(site: &BangSite) -> Result<Op, BangError> {
     if site.spelling == Spelling::LegacyMutablePrefix && site.verb != Verb::BorrowMut {
         return Err(invalid("E_BANG_SPELLING_KIND"));
     }
-    if matches!(site.source_authority, SourceAuthority::ActorState | SourceAuthority::Unknown) {
+    if matches!(
+        site.source_authority,
+        SourceAuthority::ActorState | SourceAuthority::Unknown
+    ) {
         return Err(invalid("E_BANG_AUTHORITY"));
     }
     let owned = site.source_authority == SourceAuthority::Owned;
@@ -124,7 +132,10 @@ fn expected_operation(site: &BangSite) -> Result<Op, BangError> {
                 return Err(invalid("E_BANG_DESTINATION"));
             }
             if owned {
-                Ok(Op::Copy { from: site.from, into })
+                Ok(Op::Copy {
+                    from: site.from,
+                    into,
+                })
             } else {
                 Ok(Op::CopyThrough {
                     owner: site.from,
@@ -145,7 +156,10 @@ fn expected_operation(site: &BangSite) -> Result<Op, BangError> {
             if into == 0 || into == site.from {
                 return Err(invalid("E_BANG_DESTINATION"));
             }
-            Ok(Op::Move { from: site.from, into })
+            Ok(Op::Move {
+                from: site.from,
+                into,
+            })
         }
         Verb::Borrow | Verb::BorrowMut => {
             if !owned {
