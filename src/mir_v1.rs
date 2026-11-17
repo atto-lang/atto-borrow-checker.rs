@@ -105,7 +105,7 @@ pub fn verify_mir_with_shadow_v0(
     return verify_with_shadow_v0(&validate_and_lower(function)?, sink).map_err(MirError::Unsafe);
 }
 
-fn validate_and_lower(function: &MirFunction) -> Result<Program, MirError> {
+pub(crate) fn validate_and_lower(function: &MirFunction) -> Result<Program, MirError> {
     if function.version != CONTRACT_VERSION {
         return Err(MirError::Invalid("E_MIR_VERSION"));
     }
