@@ -10,7 +10,7 @@ See [hybrid integration design](docs/HYBRID_COMPILER_INTEGRATION.md).
 
 ## Experimental Polonius-inspired oracle
 
-The standalone `polonius_facts_v1` module adds bounded, point-sensitive loan fact propagation and branch-local liveness, inspired by Rust's Polonius Alpha. It does **not** implement full Polonius Alpha, authenticate typed-MIR facts, or permit production V0/cyclic validation to be skipped. See [design and safety limits](docs/POLONIUS_LOAN_FACTS_V1.md).
+The standalone `polonius_facts_v1` module adds bounded, point-sensitive loan fact propagation and branch-local liveness, inspired by Rust's Polonius Alpha. Its experimental `analyze_with_inferred_liveness` API derives branch-local lifetime facts backwards from typed-MIR use records, including a positive `Some(return)` / `None(insert, retry)` regression; it still cannot authenticate those source facts. It does **not** implement full Polonius Alpha, authenticate typed-MIR facts, or permit production V0/cyclic validation to be skipped. See [design and safety limits](docs/POLONIUS_LOAN_FACTS_V1.md).
 
 ## Current implementation
 
