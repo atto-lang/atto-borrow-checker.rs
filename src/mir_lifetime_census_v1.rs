@@ -35,17 +35,34 @@ pub struct Event {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum EventKind {
     Point,
-    Edge { to: u32 },
-    Issue { origin: u32, loan: u32 },
-    Kill { loan: u32 },
-    Invalidate { loan: u32 },
-    Subset { from: u32, to: u32 },
+    Edge {
+        to: u32,
+    },
+    Issue {
+        origin: u32,
+        loan: u32,
+    },
+    Kill {
+        loan: u32,
+    },
+    Invalidate {
+        loan: u32,
+    },
+    Subset {
+        from: u32,
+        to: u32,
+    },
     /// SSA phi incoming edge. Must be represented by a dedicated CFG edge
     /// split point having exactly one predecessor and one successor. This
     /// prevents incorrectly mixing both predecessors' region identities.
-    PhiEdge { from: u32, to: u32 },
+    PhiEdge {
+        from: u32,
+        to: u32,
+    },
     /// Includes return-borrow and captured-borrow uses at their own points.
-    Use { origin: u32 },
+    Use {
+        origin: u32,
+    },
     Unsupported,
 }
 
@@ -109,9 +126,7 @@ pub fn verify_closed_census(census: &Census) -> Result<InferredReport, Error> {
     if census.version != CONTRACT_VERSION {
         return Err(fail(Code::Version, 0));
     }
-    if census.entry == 0
-        || census.expected_events.len() != census.observed_events.len()
-    {
+    if census.entry == 0 || census.expected_events.len() != census.observed_events.len() {
         return Err(fail(Code::Mismatch, 0));
     }
     let expected = inventory(&census.expected_events)?;
