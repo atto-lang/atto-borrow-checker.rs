@@ -352,3 +352,92 @@ fn unknown_ticket_and_double_settlement_never_mutate_counts() {
     assert_eq!(ledger.finish(9, 4), Err(Error::UnknownTicket));
     assert_eq!(ledger.counts(), (0, 0));
 }
+
+#[test]
+fn simultaneous_lease_requests_are_region_wide_and_conflict_before_admission() {
+    let graph = cyclic();
+    let mut read_one = request(DeliveryMode::ReadLease);
+    let mut read_two = request(DeliveryMode::ReadLease);
+    read_two.ticket = 10;
+    let mut write = request(DeliveryMode::WriteLease);
+    write.ticket = 11;
+
+    let read_one = verify_delivery(&graph, &read_one).unwrap();
+    let read_two = verify_delivery(&graph, &read_two).unwrap();
+    let write = verify_delivery(&graph, &write).unwrap();
+
+    let mut ledger = DeliveryLedger::new(3);
+    ledger.prepare(&read_one).unwrap();
+    ledger.prepare(&read_two).unwrap();
+    assert_eq!(ledger.prepare(&write), Err(Error::LeaseConflict));
+    ledger.commit(9, 5).unwrap();
+    ledger.abort(10, 5).unwrap();
+    assert_eq!(ledger.prepare(&write), Err(Error::LeaseConflict));
+    ledger.finish(9, 5).unwrap();
+    ledger.prepare(&write).unwrap();
+    assert_eq!(ledger.commit(11, 5), Ok(false));
+    ledger.finish(11, 5).unwrap();
+}
+
+#[test]
+fn pending_transfer_excludes_leases_and_duplicate_copy_readers() {
+    let graph = cyclic();
+    let transfer = verify_delivery(&graph, &request(DeliveryMode::Transfer)).unwrap();
+    let mut read = request(DeliveryMode::ReadLease);
+    read.ticket = 12;
+    let read = verify_delivery(&graph, &read).unwrap();
+    let mut copy = request(DeliveryMode::DeepCopy);
+    copy.ticket = 13;
+    let copy = verify_delivery(&graph, &copy).unwrap();
+
+    let mut ledger = DeliveryLedger::new(3);
+    ledger.prepare(&transfer).unwrap();
+    assert_eq!(ledger.prepare(&read), Err(Error::LeaseConflict));
+    assert_eq!(ledger.prepare(&copy), Err(Error::LeaseConflict));
+    ledger.abort(9, 5).unwrap();
+    ledger.prepare(&read).unwrap();
+    ledger.prepare(&copy).unwrap();
+    assert_eq!(ledger.commit(13, 5), Ok(false));
+    ledger.finish(13, 5).unwrap();
+    ledger.finish(12, 5).unwrap_err(); // not yet committed
+    ledger.commit(12, 5).unwrap();
+    ledger.finish(12, 5).unwrap();
+}
+
+#[test]
+fn committed_transfer_invalidates_stale_source_proofs() {
+    let graph = cyclic();
+    let proof = verify_delivery(&graph, &request(DeliveryMode::Transfer)).unwrap();
+    let mut second = request(DeliveryMode::Transfer);
+    second.ticket = 14;
+    let second = verify_delivery(&graph, &second).unwrap();
+
+    let mut ledger = DeliveryLedger::new(3);
+    ledger.prepare(&proof).unwrap();
+    ledger.commit(9, 5).unwrap();
+    ledger.finish(9, 5).unwrap();
+    assert_eq!(
+        ledger.prepare(&second),
+        Err(Error::OwnershipNotExclusive)
+    );
+}
+
+#[test]
+fn ticket_epochs_must_increase_after_prior_aborted_ticket() {
+    let graph = cyclic();
+    let first = verify_delivery(&graph, &request(DeliveryMode::ReadLease)).unwrap();
+    let mut ledger = DeliveryLedger::new(2);
+    ledger.prepare(&first).unwrap();
+    ledger.abort(9, 5).unwrap();
+
+    let mut stale = request(DeliveryMode::ReadLease);
+    stale.ticket_generation = 4;
+    assert_eq!(
+        ledger.prepare(&verify_delivery(&graph, &stale).unwrap()),
+        Err(Error::DuplicateTicket)
+    );
+
+    stale.ticket_generation = 6;
+    ledger.prepare(&verify_delivery(&graph, &stale).unwrap()).unwrap();
+    ledger.abort(9, 6).unwrap();
+}
