@@ -5,8 +5,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::mailman_delivery_v1::{
-    verify_delivery, DeliveryLedger, DeliveryMode, DeliveryRequest, Error as DeliveryError,
-    GraphInventory, SelectedDelivery, VerifiedDelivery,
+    verify_delivery, AllocationId, DeliveryLedger, DeliveryMode, DeliveryRequest,
+    Error as DeliveryError, GraphInventory, SelectedDelivery, VerifiedDelivery,
 };
 use crate::mir_v1::{verify_mir, Effect, MirError, MirFunction, Producer};
 use crate::{Op, OwnerId, SendTicketId};
@@ -22,6 +22,8 @@ pub struct SourceTransferSite {
     pub source_node_id: u64,
     pub owner: OwnerId,
     pub ticket: SendTicketId,
+    /// Compiler-resolved canonical root allocation for this owned value.
+    pub root_allocation: AllocationId,
 }
 
 /// Independently derived native type/CFG census; submitted values are not
@@ -41,6 +43,7 @@ pub enum Error {
     DuplicateSite,
     IncompleteCensus,
     SendSiteMismatch,
+    RootBindingMismatch,
     UnsupportedDeliveryMode,
     UnsupportedActorEffect,
     MissingCommitOrRollback,
@@ -64,6 +67,7 @@ impl Error {
             Self::DuplicateSite => "E_MAIL_BIND_DUPLICATE_SITE",
             Self::IncompleteCensus => "E_MAIL_BIND_INCOMPLETE_CENSUS",
             Self::SendSiteMismatch => "E_MAIL_BIND_SOURCE_MIR_MISMATCH",
+            Self::RootBindingMismatch => "E_MAIL_BIND_ROOT_MISMATCH",
             Self::UnsupportedDeliveryMode => "E_MAIL_BIND_UNSUPPORTED_MODE",
             Self::UnsupportedActorEffect => "E_MAIL_BIND_UNMODELED_ACTOR_EFFECT",
             Self::MissingCommitOrRollback => "E_MAIL_BIND_UNRESOLVED_SEND",
@@ -151,6 +155,7 @@ pub fn verify_compiler_transfer(
             || site.source_node_id == 0
             || site.owner == 0
             || site.ticket == 0
+            || site.root_allocation == 0
         {
             return Err(Error::InvalidSite);
         }
@@ -217,6 +222,9 @@ pub fn verify_compiler_transfer(
     else {
         return Err(Error::SendSiteMismatch);
     };
+    if site.root_allocation != graph.root {
+        return Err(Error::RootBindingMismatch);
+    }
     if request.source_domain == 0
         || request.destination_domain == 0
         || request.source_domain != request.destination_domain
