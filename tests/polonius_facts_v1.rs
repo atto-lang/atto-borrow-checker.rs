@@ -226,7 +226,6 @@ fn newly_issued_loans_follow_same_point_subset_edges() {
     );
 }
 
-
 // The following tests derive region liveness rather than manually supplying
 // live_origins, reproducing Polonius Alpha's get_mut / None / insert scenario.
 mod inferred_liveness {
@@ -295,7 +294,10 @@ mod inferred_liveness {
         let mut insert = point(3, &[]);
         insert.invalidate.push(7);
         let err = check(vec![lookup, some_return, insert], &[(2, 10), (3, 10)]).unwrap_err();
-        assert_eq!((err.code, err.point, err.loan), (Code::InvalidatedLoan, 3, Some(7)));
+        assert_eq!(
+            (err.code, err.point, err.loan),
+            (Code::InvalidatedLoan, 3, Some(7))
+        );
     }
 
     #[test]
@@ -306,7 +308,10 @@ mod inferred_liveness {
         some.invalidate.push(7);
         let none = point(3, &[]);
         let err = check(vec![lookup, some, none], &[(2, 10)]).unwrap_err();
-        assert_eq!((err.code, err.point, err.loan), (Code::InvalidatedLoan, 2, Some(7)));
+        assert_eq!(
+            (err.code, err.point, err.loan),
+            (Code::InvalidatedLoan, 2, Some(7))
+        );
     }
 
     #[test]
@@ -318,7 +323,10 @@ mod inferred_liveness {
         right.invalidate.push(7);
         let join = point(4, &[]);
         let err = check(vec![lookup, left, right, join], &[(4, 10)]).unwrap_err();
-        assert_eq!((err.code, err.point, err.loan), (Code::InvalidatedLoan, 3, Some(7)));
+        assert_eq!(
+            (err.code, err.point, err.loan),
+            (Code::InvalidatedLoan, 3, Some(7))
+        );
     }
 
     #[test]
@@ -329,7 +337,10 @@ mod inferred_liveness {
         let mut returned = point(2, &[]);
         returned.invalidate.push(7);
         let err = check(vec![lookup, returned], &[(2, 30)]).unwrap_err();
-        assert_eq!((err.code, err.point, err.loan), (Code::InvalidatedLoan, 2, Some(7)));
+        assert_eq!(
+            (err.code, err.point, err.loan),
+            (Code::InvalidatedLoan, 2, Some(7))
+        );
     }
 
     #[test]
@@ -351,7 +362,10 @@ mod inferred_liveness {
         loop_body.invalidate.push(7);
         let exit = point(3, &[]);
         let err = check(vec![lookup, loop_body, exit], &[(3, 10)]).unwrap_err();
-        assert_eq!((err.code, err.point, err.loan), (Code::InvalidatedLoan, 2, Some(7)));
+        assert_eq!(
+            (err.code, err.point, err.loan),
+            (Code::InvalidatedLoan, 2, Some(7))
+        );
     }
 
     #[test]
