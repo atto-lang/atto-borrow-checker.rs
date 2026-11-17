@@ -40,6 +40,10 @@ pub enum EventKind {
     Kill { loan: u32 },
     Invalidate { loan: u32 },
     Subset { from: u32, to: u32 },
+    /// SSA phi incoming edge. Must be represented by a dedicated CFG edge
+    /// split point having exactly one predecessor and one successor. This
+    /// prevents incorrectly mixing both predecessors' region identities.
+    PhiEdge { from: u32, to: u32 },
     /// Includes return-borrow and captured-borrow uses at their own points.
     Use { origin: u32 },
     Unsupported,
@@ -151,6 +155,7 @@ pub fn verify_closed_census(census: &Census) -> Result<InferredReport, Error> {
         return Err(fail(Code::MissingPoint, 0));
     }
     let mut uses = Vec::new();
+    let mut phi_points = BTreeSet::new();
     let mut seen_events = BTreeSet::new();
     for event in observed.values() {
         let Some(point) = points.get_mut(&event.point) else {
@@ -191,6 +196,12 @@ pub fn verify_closed_census(census: &Census) -> Result<InferredReport, Error> {
                 }
                 point.subset.push((from, to));
             }
+            EventKind::PhiEdge { from, to } => {
+                if from == 0 || to == 0 || from == to || !phi_points.insert(event.point) {
+                    return Err(fail(Code::InvalidEvent, event.id));
+                }
+                point.subset.push((from, to));
+            }
             EventKind::Use { origin } => {
                 if origin == 0 {
                     return Err(fail(Code::InvalidEvent, event.id));
@@ -203,6 +214,28 @@ pub fn verify_closed_census(census: &Census) -> Result<InferredReport, Error> {
             EventKind::Unsupported => {
                 return Err(fail(Code::Unsupported, event.id));
             }
+        }
+    }
+    // An edge-local SSA phi must not be lowered as a join-wide subset:
+    // each incoming predecessor gets its OWN explicit edge split point.
+    let mut predecessors = BTreeMap::<u32, usize>::new();
+    for point in points.values() {
+        for &successor in &point.successors {
+            *predecessors.entry(successor).or_insert(0) += 1;
+        }
+    }
+    for &id in &phi_points {
+        let point = &points[&id];
+        if id == census.entry
+            || predecessors.get(&id) != Some(&1)
+            || point.successors.len() != 1
+            || point.subset.len() != 1
+            || !point.issue.is_empty()
+            || !point.kill.is_empty()
+            || !point.invalidate.is_empty()
+            || uses.iter().any(|used| used.point == id)
+        {
+            return Err(fail(Code::InvalidEvent, 0));
         }
     }
     let facts = Facts {
