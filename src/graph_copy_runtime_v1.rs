@@ -19,6 +19,7 @@ use crate::copy_graph_v1::{
 /// Reference-only node index inside exactly one Arena.
 pub type NodeId = usize;
 pub const MAX_CLONE_NODES: usize = 1024;
+pub const MAX_CLONE_DEPTH: usize = 128;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Slot {
@@ -53,6 +54,7 @@ impl Arena {
 /// A top-level copy gets a fresh context. Never share it among actor sends;
 /// no static/runtime-global identity cache is permitted.
 pub struct GraphCopyContext<'a> {
+    descriptors: &'a [TypeDescriptor],
     types: BTreeMap<TypeId, &'a TypeDescriptor>,
     source: &'a Arena,
     destination: &'a mut Arena,
@@ -83,6 +85,7 @@ impl<'a> GraphCopyContext<'a> {
             }
         }
         Ok(Self {
+            descriptors: types,
             types: by_type,
             source,
             destination,
@@ -97,7 +100,6 @@ impl<'a> GraphCopyContext<'a> {
     /// This caller owns a fresh memo per top-level invocation.
     pub fn copy_root(
         &mut self,
-        types: &[TypeDescriptor],
         root: NodeId,
         static_type: TypeId,
         actor_send: bool,
@@ -106,7 +108,7 @@ impl<'a> GraphCopyContext<'a> {
             return Err(Error("E_COPY_CONTEXT_REUSE"));
         }
         let concrete = self.source.nodes.get(root).ok_or(Error("E_COPY_LAYOUT"))?.concrete_type;
-        admit_copy(types, CopyRequest {
+        admit_copy(self.descriptors, CopyRequest {
             concrete_type: concrete,
             static_type,
             mode: CopyMode::Deep,
@@ -116,7 +118,7 @@ impl<'a> GraphCopyContext<'a> {
         // attempting allocation. A malicious caller cannot simply assert an
         // actor-Sendable witness to bypass actual type graph traversal.
         let checkpoint = self.destination.nodes.len();
-        match self.clone_node(root) {
+        match self.clone_node(root, 0) {
             Ok(node) => Ok(node),
             Err(err) => {
                 self.destination.nodes.truncate(checkpoint);
@@ -127,20 +129,35 @@ impl<'a> GraphCopyContext<'a> {
         }
     }
 
-    fn clone_node(&mut self, source_id: NodeId) -> Result<NodeId, Error> {
+    fn clone_node(&mut self, source_id: NodeId, depth: usize) -> Result<NodeId, Error> {
         if let Some(&copied) = self.memo.get(&source_id) {
             return Ok(copied);
         }
-        if self.appended >= self.max_nodes {
+        if self.appended >= self.max_nodes || depth >= MAX_CLONE_DEPTH {
             return Err(Error("E_COPY_GRAPH_BUDGET"));
         }
         let src = self.source.nodes.get(source_id).ok_or(Error("E_COPY_LAYOUT"))?;
-        let ty = self.types.get(&src.concrete_type).ok_or(Error("E_COPY_AOT_WITNESS"))?;
-        if src.fields.len() != ty.fields.len() {
+        let type_id = src.concrete_type;
+        // The source node must contain the COMPLETE flattened concrete field
+        // inventory, including private/inherited base fields in base-first
+        // order. Copy the verified layout before recursive &mut self calls.
+        let mut layouts = Vec::new();
+        let mut cur = Some(type_id);
+        let mut ancestors = Vec::new();
+        while let Some(id) = cur {
+            if ancestors.contains(&id) || ancestors.len() >= crate::copy_graph_v1::MAX_COPY_TYPES {
+                return Err(Error("E_COPY_LAYOUT"));
+            }
+            ancestors.push(id);
+            cur = self.types.get(&id).ok_or(Error("E_COPY_AOT_WITNESS"))?.parent;
+        }
+        for id in ancestors.into_iter().rev() {
+            layouts.extend(self.types[&id].fields.iter().cloned());
+        }
+        if src.fields.len() != layouts.len() {
             return Err(Error("E_COPY_LAYOUT"));
         }
         let fields = src.fields.clone();
-        let type_id = src.concrete_type;
         // Constructor-free clone shell, tracked before visiting descendants.
         // This ordering is essential for repeated references and cycles.
         let dst_id = self.destination.nodes.len();
@@ -152,7 +169,7 @@ impl<'a> GraphCopyContext<'a> {
         self.memo.insert(source_id, dst_id);
 
         let mut cloned = Vec::with_capacity(fields.len());
-        for (value, field) in fields.iter().zip(&ty.fields) {
+        for (value, field) in fields.iter().zip(&layouts) {
             let result = match (value, field.kind) {
                 (Slot::Scalar(v), FieldKind::Scalar) => Slot::Scalar(*v),
                 (Slot::Frozen(id), FieldKind::ImmutableShared) => Slot::Frozen(*id),
@@ -165,7 +182,7 @@ impl<'a> GraphCopyContext<'a> {
                     if actual != expected {
                         return Err(Error("E_COPY_LAYOUT"));
                     }
-                    Slot::Mutable(Some(self.clone_node(*child)?))
+                    Slot::Mutable(Some(self.clone_node(*child, depth + 1)?))
                 }
                 (_, FieldKind::Borrowed) => return Err(Error("E_COPY_VIEW")),
                 (_, FieldKind::Resource) => return Err(Error("E_COPY_FORBIDDEN")),
