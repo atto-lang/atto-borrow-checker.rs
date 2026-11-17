@@ -10,6 +10,15 @@
 //!
 //! This does NOT move physical heaps, authenticate compiler codegen, mint
 //! unforgeable cross-process tokens, or safely expose arbitrary shared memory.
+//!
+//! External crates cannot open arbitrary domains or mint allocator registrations.
+//! Those methods deliberately live behind the crate-private runtime adapter.
+//! ```compile_fail
+//! use atto_borrow_checker::mailman_runtime_authority_v1::{DomainAuthority, ActorIdentity};
+//! let actor = ActorIdentity { id: 300, generation: 12 };
+//! let authority = DomainAuthority::open(7, actor, 1, &[(1, 1)]);
+//! ```
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, OnceLock};
 
