@@ -172,6 +172,26 @@ impl VerifiedDelivery {
     pub fn ticket_generation(&self) -> u64 {
         self.ticket_generation
     }
+
+    /// Compiler/runtime bridge only. Allocation identities are not
+    /// public, user-mintable grant tokens.
+    pub(crate) fn allocation_keys(&self) -> &[AllocationKey] {
+        &self.keys
+    }
+}
+
+impl AllocationKey {
+    pub(crate) fn domain(self) -> u64 {
+        self.domain
+    }
+
+    pub(crate) fn id(self) -> AllocationId {
+        self.id
+    }
+
+    pub(crate) fn generation(self) -> u64 {
+        self.generation
+    }
 }
 
 fn verify_inventory(inventory: &GraphInventory) -> Result<Vec<AllocationId>, Error> {
