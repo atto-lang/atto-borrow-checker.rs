@@ -379,7 +379,9 @@ fn is_writer(mode: SelectedDelivery) -> bool {
 fn is_reader(mode: SelectedDelivery) -> bool {
     matches!(
         mode,
-        SelectedDelivery::DeepCopy | SelectedDelivery::ReadLease
+        SelectedDelivery::DeepCopy
+            | SelectedDelivery::ReadLease
+            | SelectedDelivery::FrozenShare
     )
 }
 
@@ -457,8 +459,7 @@ impl DeliveryLedger {
             let guard = self.guards.get(node).copied().unwrap_or_default();
             if (is_writer(proof.selected) && (guard.writer || guard.readers != 0))
                 || (is_reader(proof.selected) && guard.writer)
-                || (proof.selected == SelectedDelivery::FrozenShare
-                    && (guard.writer || guard.readers != 0))
+                || (proof.selected == SelectedDelivery::FrozenShare && guard.writer)
             {
                 return Err(Error::LeaseConflict);
             }
