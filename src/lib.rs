@@ -364,7 +364,10 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
             into,
             detached_proven,
         } => {
-            let source = state.live.get(&owner).ok_or_else(|| bad("E_USE_AFTER_MOVE_OR_DROP"))?;
+            let source = state
+                .live
+                .get(&owner)
+                .ok_or_else(|| bad("E_USE_AFTER_MOVE_OR_DROP"))?;
             if !matches!(state.loans.get(&loan), Some(Loan { owner: o, .. }) if *o == owner) {
                 return Err(bad("E_LOAN_NOT_ACTIVE_OR_WRONG_OWNER"));
             }
@@ -380,7 +383,13 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
             let traits = source.traits;
             let acquisition = next_acquisition(state);
             state.ever_owned.insert(into);
-            state.live.insert(into, Owner { traits, acquisition });
+            state.live.insert(
+                into,
+                Owner {
+                    traits,
+                    acquisition,
+                },
+            );
         }
         Op::WriteThrough { owner, loan } => {
             if !is_live(state, owner) {
