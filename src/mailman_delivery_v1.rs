@@ -293,7 +293,31 @@ pub fn verify_delivery(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Ticket {
     selected: SelectedDelivery,
+    reachable: Vec<AllocationId>,
     active_users: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct RegionGuard {
+    readers: usize,
+    writer: bool,
+}
+
+fn is_writer(mode: SelectedDelivery) -> bool {
+    matches!(
+        mode,
+        SelectedDelivery::Transfer
+            | SelectedDelivery::ElidedDeepCopy
+            | SelectedDelivery::WriteLease
+    )
+}
+
+fn is_reader(mode: SelectedDelivery) -> bool {
+    matches!(mode, SelectedDelivery::DeepCopy | SelectedDelivery::ReadLease)
+}
+
+fn retains_guard_after_commit(mode: SelectedDelivery) -> bool {
+    !matches!(mode, SelectedDelivery::DeepCopy | SelectedDelivery::FrozenShare)
 }
 
 /// Bounded *host model* for Mailman escrow/admission, not a physical mailbox.
@@ -306,6 +330,9 @@ pub struct DeliveryLedger {
     pending: BTreeMap<(u64, u64), Ticket>,
     delivered: BTreeMap<(u64, u64), Ticket>,
     seen: BTreeSet<(u64, u64)>,
+    latest_ticket_generation: BTreeMap<u64, u64>,
+    guards: BTreeMap<AllocationId, RegionGuard>,
+    consumed: BTreeSet<AllocationId>,
 }
 
 impl DeliveryLedger {
@@ -317,12 +344,20 @@ impl DeliveryLedger {
             pending: BTreeMap::new(),
             delivered: BTreeMap::new(),
             seen: BTreeSet::new(),
+            latest_ticket_generation: BTreeMap::new(),
+            guards: BTreeMap::new(),
+            consumed: BTreeSet::new(),
         }
     }
 
     pub fn prepare(&mut self, proof: &VerifiedDelivery) -> Result<(), Error> {
         let id = (proof.ticket, proof.ticket_generation);
-        if self.seen.contains(&id) {
+        if self.seen.contains(&id)
+            || self
+                .latest_ticket_generation
+                .get(&proof.ticket)
+                .is_some_and(|epoch| *epoch >= proof.ticket_generation)
+        {
             return Err(Error::DuplicateTicket);
         }
         if self.seen.len() >= MAX_TICKETS {
@@ -331,11 +366,28 @@ impl DeliveryLedger {
         if self.reserved.saturating_add(self.committed) >= self.capacity {
             return Err(Error::MailboxFull);
         }
+        for node in &proof.reachable {
+            if self.consumed.contains(node) {
+                return Err(Error::OwnershipNotExclusive);
+            }
+            let guard = self.guards.get(node).copied().unwrap_or_default();
+            if (is_writer(proof.selected) && (guard.writer || guard.readers != 0))
+                || (is_reader(proof.selected) && guard.writer)
+                || (proof.selected == SelectedDelivery::FrozenShare
+                    && (guard.writer || guard.readers != 0))
+            {
+                return Err(Error::LeaseConflict);
+            }
+        }
+        self.acquire_guards(proof.selected, &proof.reachable);
         self.seen.insert(id);
+        self.latest_ticket_generation
+            .insert(proof.ticket, proof.ticket_generation);
         self.pending.insert(
             id,
             Ticket {
                 selected: proof.selected,
+                reachable: proof.reachable.clone(),
                 active_users: 0,
             },
         );
@@ -343,22 +395,57 @@ impl DeliveryLedger {
         Ok(())
     }
 
+    fn acquire_guards(&mut self, mode: SelectedDelivery, nodes: &[AllocationId]) {
+        for id in nodes {
+            let guard = self.guards.entry(*id).or_default();
+            if is_reader(mode) {
+                guard.readers += 1;
+            } else if is_writer(mode) {
+                guard.writer = true;
+            }
+        }
+    }
+
+    fn release_guards(&mut self, mode: SelectedDelivery, nodes: &[AllocationId]) {
+        for id in nodes {
+            if let Some(guard) = self.guards.get_mut(id) {
+                if is_reader(mode) {
+                    guard.readers -= 1;
+                } else if is_writer(mode) {
+                    guard.writer = false;
+                }
+                if guard.readers == 0 && !guard.writer {
+                    self.guards.remove(id);
+                }
+            }
+        }
+    }
+
     pub fn commit(&mut self, ticket: u64, generation: u64) -> Result<bool, Error> {
         let id = (ticket, generation);
         let value = self.pending.remove(&id).ok_or(Error::UnknownTicket)?;
         self.reserved -= 1;
         self.committed += 1;
-        self.delivered.insert(id, value);
-        Ok(matches!(
+        if !retains_guard_after_commit(value.selected) {
+            self.release_guards(value.selected, &value.reachable);
+        }
+        let consumed = matches!(
             value.selected,
             SelectedDelivery::Transfer | SelectedDelivery::ElidedDeepCopy
-        ))
+        );
+        if consumed {
+            self.consumed.extend(value.reachable.iter().copied());
+        }
+        self.delivered.insert(id, value);
+        Ok(consumed)
     }
 
     pub fn abort(&mut self, ticket: u64, generation: u64) -> Result<(), Error> {
-        if self.pending.remove(&(ticket, generation)).is_none() {
-            return Err(Error::UnknownTicket);
-        }
+        let value = self
+            .pending
+            .remove(&(ticket, generation))
+            .ok_or(Error::UnknownTicket)?;
+        self.release_guards(value.selected, &value.reachable);
         self.reserved -= 1;
         Ok(())
     }
@@ -396,7 +483,10 @@ impl DeliveryLedger {
         if value.active_users != 0 {
             return Err(Error::LeaseStillActive);
         }
-        self.delivered.remove(&id);
+        let value = self.delivered.remove(&id).ok_or(Error::UnknownTicket)?;
+        if retains_guard_after_commit(value.selected) {
+            self.release_guards(value.selected, &value.reachable);
+        }
         self.committed -= 1;
         Ok(())
     }
