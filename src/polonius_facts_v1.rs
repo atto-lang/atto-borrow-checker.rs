@@ -289,7 +289,6 @@ pub fn analyze(facts: &Facts) -> Result<Report, Error> {
     })
 }
 
-
 /// A verified MIR use of one loan-bearing origin at an instruction point.
 ///
 /// A terminal return carrying a borrow MUST appear as a use. Input argument
@@ -341,7 +340,9 @@ pub fn analyze_with_inferred_liveness(
     let mut edge_count = 0usize;
 
     for point in &template.points {
-        if point.id == 0 || !point.live_origins.is_empty() || points.insert(point.id, point).is_some()
+        if point.id == 0
+            || !point.live_origins.is_empty()
+            || points.insert(point.id, point).is_some()
         {
             return Err(error(Code::InvalidFact, point.id));
         }
