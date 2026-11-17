@@ -1,7 +1,5 @@
 use atto_borrow_checker::polonius_facts_v1::{Code, Facts, OriginUse, Point};
-use atto_borrow_checker::polonius_ssa_v1::{
-    analyze_ssa, loan_ids, Definition, Input, PhiInput,
-};
+use atto_borrow_checker::polonius_ssa_v1::{analyze_ssa, loan_ids, Definition, Input, PhiInput};
 
 fn point(id: u32, successors: &[u32]) -> Point {
     Point {
@@ -28,9 +26,10 @@ fn sample() -> Input {
     let mut reborrow = point(4, &[5]);
     reborrow.issue.push((20, 8));
     Input {
-        template: Facts { entry: 1, points: vec![
-            entry, point(2, &[]), none, reborrow, point(5, &[])
-        ] },
+        template: Facts {
+            entry: 1,
+            points: vec![entry, point(2, &[]), none, reborrow, point(5, &[])],
+        },
         uses: vec![used(2, 10), used(5, 20)],
         definitions: vec![definition(1, 10), definition(4, 20)],
         phi_inputs: vec![],
@@ -50,7 +49,10 @@ fn a_live_old_loan_on_none_path_forbids_insert() {
     let mut input = sample();
     input.uses.push(used(3, 10));
     let e = analyze_ssa(&input).unwrap_err();
-    assert_eq!((e.code, e.point, e.loan), (Code::InvalidatedLoan, 3, Some(7)));
+    assert_eq!(
+        (e.code, e.point, e.loan),
+        (Code::InvalidatedLoan, 3, Some(7))
+    );
 }
 #[test]
 fn fresh_ssa_definition_does_not_keep_old_loan_alive() {
@@ -60,7 +62,10 @@ fn fresh_ssa_definition_does_not_keep_old_loan_alive() {
     overwrite.issue.push((20, 8));
     overwrite.invalidate.push(7);
     let input = Input {
-        template: Facts { entry: 1, points: vec![first, overwrite, point(3, &[])] },
+        template: Facts {
+            entry: 1,
+            points: vec![first, overwrite, point(3, &[])],
+        },
         uses: vec![used(3, 20)],
         definitions: vec![definition(1, 10), definition(2, 20)],
         phi_inputs: vec![],
@@ -93,14 +98,31 @@ fn phi_sample() -> Input {
     let mut right = point(3, &[4]);
     right.issue.push((20, 8));
     Input {
-        template: Facts { entry: 1, points: vec![
-            point(1, &[2, 3]), left, right, point(4, &[5]), point(5, &[])
-        ] },
+        template: Facts {
+            entry: 1,
+            points: vec![
+                point(1, &[2, 3]),
+                left,
+                right,
+                point(4, &[5]),
+                point(5, &[]),
+            ],
+        },
         uses: vec![used(5, 30)],
         definitions: vec![definition(2, 10), definition(3, 20), definition(4, 30)],
         phi_inputs: vec![
-            PhiInput { predecessor: 2, successor: 4, source: 10, destination: 30 },
-            PhiInput { predecessor: 3, successor: 4, source: 20, destination: 30 },
+            PhiInput {
+                predecessor: 2,
+                successor: 4,
+                source: 10,
+                destination: 30,
+            },
+            PhiInput {
+                predecessor: 3,
+                successor: 4,
+                source: 20,
+                destination: 30,
+            },
         ],
     }
 }
@@ -120,7 +142,10 @@ fn live_phi_return_does_not_launder_conflicting_writes() {
     let mut input = phi_sample();
     input.template.points[4].invalidate.push(7);
     let e = analyze_ssa(&input).unwrap_err();
-    assert_eq!((e.code, e.point, e.loan), (Code::InvalidatedLoan, 5, Some(7)));
+    assert_eq!(
+        (e.code, e.point, e.loan),
+        (Code::InvalidatedLoan, 5, Some(7))
+    );
 }
 #[test]
 fn incomplete_phi_inputs_are_rejected() {
@@ -154,7 +179,10 @@ fn a_loop_backedge_cannot_launder_a_live_loan() {
     let mut invalidation = point(3, &[]);
     invalidation.invalidate.push(7);
     let input = Input {
-        template: Facts { entry: 1, points: vec![entry, body, invalidation] },
+        template: Facts {
+            entry: 1,
+            points: vec![entry, body, invalidation],
+        },
         uses: vec![used(3, 10)],
         definitions: vec![definition(1, 10)],
         phi_inputs: vec![],
