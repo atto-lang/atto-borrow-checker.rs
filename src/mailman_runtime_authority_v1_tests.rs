@@ -1,19 +1,17 @@
 //! Safe Rust host-side tests for authoritative Mailman transfer registry.
 //! Not compiled .atto guests, production allocator attestation, or physical heap moves.
-use atto_borrow_checker::mailman_compiler_bound_v1::{
+use crate::mailman_compiler_bound_v1::{
     verify_compiler_transfer, CompilerBoundTransfer, CompilerSendCensus, Error as BrokerError,
     SourceTransferSite, CONTRACT_VERSION,
 };
-use atto_borrow_checker::mailman_delivery_v1::{
+use crate::mailman_delivery_v1::{
     Allocation, DeliveryMode, DeliveryRequest, Error as DeliveryError, GraphInventory,
 };
-use atto_borrow_checker::mailman_runtime_authority_v1::{
-    ActorIdentity, AllocationStamp, DomainAuthority, Error,
-};
-use atto_borrow_checker::mir_v1::{
+use crate::mailman_runtime_authority_v1::{ActorIdentity, AllocationStamp, DomainAuthority, Error};
+use crate::mir_v1::{
     Effect, Instruction, MirBlock, MirFunction, Producer, CONTRACT_VERSION as MIR_VERSION,
 };
-use atto_borrow_checker::{Op, Traits};
+use crate::{Op, Traits};
 use std::sync::{Arc, Barrier};
 use std::thread;
 
@@ -178,6 +176,7 @@ fn committed_transfer_invalidates_sender_then_accepts_receiver() {
     assert_eq!(registry.pending_count().unwrap(), 1);
     assert_eq!(registry.owner_of(keys[0]).unwrap(), Some((SENDER, 1)));
     let mut received = permit.commit().unwrap();
+    let session = registry.receiver_session(RECEIVER).unwrap();
     assert_eq!(registry.owner_of(keys[0]).unwrap(), None);
     assert_eq!(permit.commit().unwrap_err(), Error::GrantState);
     assert_eq!(permit.abort(), Err(Error::GrantState));
@@ -185,10 +184,10 @@ fn committed_transfer_invalidates_sender_then_accepts_receiver() {
         registry.retire_destroyed(SENDER, 1, &keys),
         Err(Error::AllocationBusy)
     );
-    received.accept(42).unwrap();
+    received.accept(&session, 42).unwrap();
     assert_eq!(registry.owner_of(keys[0]).unwrap(), Some((RECEIVER, 42)));
     assert_eq!(registry.owner_of(keys[1]).unwrap(), Some((RECEIVER, 42)));
-    assert_eq!(received.accept(42), Err(Error::GrantState));
+    assert_eq!(received.accept(&session, 42), Err(Error::GrantState));
     assert_eq!(registry.pending_count().unwrap(), 0);
     assert_eq!(
         registry
@@ -238,7 +237,8 @@ fn two_authority_handles_share_one_nonforgeable_transfer_ledger() {
     pending.abort().unwrap();
     let mut other = b.prepare(2, SENDER, &proof(domain, 10, 0, 1)).unwrap();
     let mut received = other.commit().unwrap();
-    received.accept(17).unwrap();
+    let session = a.receiver_session(RECEIVER).unwrap();
+    received.accept(&session, 17).unwrap();
     assert_eq!(a.owner_of(stamps(0, 1)[0]).unwrap(), Some((RECEIVER, 17)));
 }
 
@@ -496,12 +496,136 @@ fn receiver_must_bind_nonzero_owner_slot_and_cannot_accept_twice() {
         .prepare(1, SENDER, &proof(domain, 9, 0, 1))
         .unwrap();
     let mut received = permit.commit().unwrap();
-    assert_eq!(received.accept(0), Err(Error::InvalidOwner));
+    let session = registry.receiver_session(RECEIVER).unwrap();
+    assert_eq!(received.accept(&session, 0), Err(Error::InvalidOwner));
     assert_eq!(registry.owner_of(stamps(0, 1)[0]).unwrap(), None);
-    received.accept(99).unwrap();
-    assert_eq!(received.accept(99), Err(Error::GrantState));
+    received.accept(&session, 99).unwrap();
+    assert_eq!(received.accept(&session, 99), Err(Error::GrantState));
     assert_eq!(
         registry.owner_of(stamps(0, 1)[0]).unwrap(),
         Some((RECEIVER, 99))
     );
+}
+
+#[test]
+fn only_scheduler_bound_receiver_can_accept_committed_transfer() {
+    let domain = 1013;
+    let registry = authority(domain);
+    registry
+        .register_allocator_owned(SENDER, 1, &stamps(0, 1))
+        .unwrap();
+    let mut permit = registry
+        .prepare(1, SENDER, &proof(domain, 9, 0, 1))
+        .unwrap();
+    let mut received = permit.commit().unwrap();
+
+    let wrong_id = ActorIdentity {
+        id: RECEIVER.id + 1,
+        generation: RECEIVER.generation,
+    };
+    assert_eq!(
+        registry.receiver_session(wrong_id).unwrap_err(),
+        Error::WrongReceiver
+    );
+    let wrong_generation = ActorIdentity {
+        id: RECEIVER.id,
+        generation: RECEIVER.generation + 1,
+    };
+    assert_eq!(
+        registry.receiver_session(wrong_generation).unwrap_err(),
+        Error::WrongReceiver
+    );
+
+    let foreign = authority(1014);
+    let foreign_session = foreign.receiver_session(RECEIVER).unwrap();
+    assert_eq!(
+        received.accept(&foreign_session, 99),
+        Err(Error::WrongReceiver)
+    );
+    assert_eq!(registry.owner_of(stamps(0, 1)[0]).unwrap(), None);
+
+    let actual = registry.receiver_session(RECEIVER).unwrap();
+    received.accept(&actual, 99).unwrap();
+    assert_eq!(
+        registry.owner_of(stamps(0, 1)[0]).unwrap(),
+        Some((RECEIVER, 99))
+    );
+    assert_eq!(received.accept(&actual, 99), Err(Error::GrantState));
+}
+
+#[test]
+fn sender_cannot_reclaim_or_reassign_inflight_memory() {
+    let domain = 1015;
+    let registry = authority(domain);
+    let allocation = stamps(0, 1);
+    registry
+        .register_allocator_owned(SENDER, 1, &allocation)
+        .unwrap();
+    let mut permit = registry
+        .prepare(1, SENDER, &proof(domain, 9, 0, 1))
+        .unwrap();
+    assert_eq!(
+        registry.retire_destroyed(SENDER, 1, &allocation),
+        Err(Error::AllocationBusy)
+    );
+    let mut received = permit.commit().unwrap();
+    assert_eq!(
+        registry.retire_destroyed(SENDER, 1, &allocation),
+        Err(Error::AllocationBusy)
+    );
+    assert_eq!(
+        registry.register_allocator_owned(SENDER, 2, &stamps(0, 2)),
+        Err(Error::AllocationBusy)
+    );
+    assert_eq!(registry.owner_of(allocation[0]).unwrap(), None);
+    received
+        .accept(&registry.receiver_session(RECEIVER).unwrap(), 17)
+        .unwrap();
+    assert_eq!(
+        registry.retire_destroyed(SENDER, 1, &allocation),
+        Err(Error::OwnerMismatch)
+    );
+}
+
+#[test]
+fn two_references_to_same_domain_have_identical_receiver_authority() {
+    let domain = 1016;
+    let sender_side = authority(domain);
+    let receiver_side = authority(domain);
+    sender_side
+        .register_allocator_owned(SENDER, 1, &stamps(0, 1))
+        .unwrap();
+    let mut permit = sender_side
+        .prepare(1, SENDER, &proof(domain, 9, 0, 1))
+        .unwrap();
+    let mut envelope = permit.commit().unwrap();
+    let session = receiver_side.receiver_session(RECEIVER).unwrap();
+    envelope.accept(&session, 18).unwrap();
+    assert_eq!(
+        sender_side.owner_of(stamps(0, 1)[0]).unwrap(),
+        Some((RECEIVER, 18))
+    );
+}
+
+#[test]
+fn rejected_wrong_receiver_does_not_consume_envelope() {
+    let domain = 1017;
+    let registry = authority(domain);
+    registry
+        .register_allocator_owned(SENDER, 1, &stamps(0, 1))
+        .unwrap();
+    let mut permit = registry
+        .prepare(1, SENDER, &proof(domain, 9, 0, 1))
+        .unwrap();
+    let mut envelope = permit.commit().unwrap();
+    let foreign = authority(1018);
+    assert_eq!(
+        envelope.accept(&foreign.receiver_session(RECEIVER).unwrap(), 7),
+        Err(Error::WrongReceiver)
+    );
+    assert_eq!(registry.pending_count().unwrap(), 1);
+    envelope
+        .accept(&registry.receiver_session(RECEIVER).unwrap(), 7)
+        .unwrap();
+    assert_eq!(registry.pending_count().unwrap(), 0);
 }

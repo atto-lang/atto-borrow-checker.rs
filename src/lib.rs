@@ -13,6 +13,9 @@ pub mod actor_state_guard_v1;
 pub mod actor_state_runtime_v1;
 pub mod mailman_compiler_bound_v1;
 pub mod mailman_delivery_v1;
+// Reference runtime adapter has no production compiler/actor caller yet.
+// The narrow dead-code allowance does not weaken its private visibility or tests.
+#[allow(dead_code)]
 pub mod mailman_runtime_authority_v1;
 
 pub type OwnerId = u32;

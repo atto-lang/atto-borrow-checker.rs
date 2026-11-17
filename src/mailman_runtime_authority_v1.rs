@@ -10,6 +10,15 @@
 //!
 //! This does NOT move physical heaps, authenticate compiler codegen, mint
 //! unforgeable cross-process tokens, or safely expose arbitrary shared memory.
+//!
+//! External crates cannot open arbitrary domains or mint allocator registrations.
+//! Those methods deliberately live behind the crate-private runtime adapter.
+//! ```compile_fail
+//! use atto_borrow_checker::mailman_runtime_authority_v1::{DomainAuthority, ActorIdentity};
+//! let actor = ActorIdentity { id: 300, generation: 12 };
+//! let authority = DomainAuthority::open(7, actor, 1, &[(1, 1)]);
+//! ```
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -49,6 +58,7 @@ pub enum Error {
     IncompleteGraph,
     WrongDomain,
     WrongActorGeneration,
+    WrongReceiver,
     GrantBudget,
     GrantMissing,
     GrantState,
@@ -72,6 +82,7 @@ impl Error {
             Self::IncompleteGraph => "E_MAIL_RUNTIME_GRAPH_MISMATCH",
             Self::WrongDomain => "E_MAIL_RUNTIME_DOMAIN",
             Self::WrongActorGeneration => "E_MAIL_RUNTIME_ACTOR_EPOCH",
+            Self::WrongReceiver => "E_MAIL_RUNTIME_WRONG_RECEIVER",
             Self::GrantBudget => "E_MAIL_RUNTIME_GRANT_BUDGET",
             Self::GrantMissing => "E_MAIL_RUNTIME_UNKNOWN_GRANT",
             Self::GrantState => "E_MAIL_RUNTIME_GRANT_STATE",
@@ -113,6 +124,7 @@ struct Grant {
     ticket: u64,
     ticket_generation: u64,
     source: ActorIdentity,
+    source_owner_slot: OwnerId,
     destination: ActorIdentity,
     allocations: Vec<AllocationStamp>,
 }
@@ -141,15 +153,16 @@ fn directory() -> &'static Mutex<Directory> {
 }
 
 /// Cloneable *handle* to one shared domain authority. The permit and receiver
-/// envelope are NOT cloneable. The global weak directory prevents the same
+/// envelope are NOT cloneable. The global strong directory prevents the same
 /// process from accidentally opening competing authorities for a live domain.
+/// Only trusted crate-internal adapters may open or mutate a registry.
 #[derive(Clone, Debug)]
 pub struct DomainAuthority {
     shared: Shared,
 }
 
 impl DomainAuthority {
-    pub fn open(
+    pub(crate) fn open(
         domain: u64,
         destination: ActorIdentity,
         capacity: usize,
@@ -196,7 +209,7 @@ impl DomainAuthority {
     /// PRIVILEGED HOST ADAPTER. Only an allocator may invoke this on actual
     /// freshly allocated live objects. It is NOT an AttoLang source API.
     /// Batch preflight is atomic: a failed registration changes no ownership.
-    pub fn register_allocator_owned(
+    pub(crate) fn register_allocator_owned(
         &self,
         actor: ActorIdentity,
         owner_slot: OwnerId,
@@ -252,7 +265,7 @@ impl DomainAuthority {
 
     /// PRIVILEGED HOST ADAPTER. The allocator MUST have performed actual
     /// object destruction before retiring these registered allocations.
-    pub fn retire_destroyed(
+    pub(crate) fn retire_destroyed(
         &self,
         actor: ActorIdentity,
         owner_slot: OwnerId,
@@ -296,7 +309,7 @@ impl DomainAuthority {
     /// The runtime gets an opaque, linear capability only after every graph
     /// node matches trusted allocator registration AND the compiler proof.
     /// There is no sender invalidation until successful commit.
-    pub fn prepare(
+    pub(crate) fn prepare(
         &self,
         mailman: u32,
         source: ActorIdentity,
@@ -366,6 +379,7 @@ impl DomainAuthority {
                 ticket,
                 ticket_generation,
                 source,
+                source_owner_slot: proof.owner(),
                 destination,
                 allocations: stamps,
             },
@@ -374,6 +388,19 @@ impl DomainAuthority {
             shared: Arc::clone(&self.shared),
             id: grant_id,
             armed: true,
+        })
+    }
+
+    /// Restricted to the trusted actor scheduler. The actor/session identity
+    /// comes from scheduler state, never from an incoming guest payload.
+    pub(crate) fn receiver_session(&self, actor: ActorIdentity) -> Result<ReceiverSession, Error> {
+        let state = self.shared.lock().map_err(|_| Error::Poisoned)?;
+        if actor.id == 0 || actor.generation == 0 || actor != state.destination {
+            return Err(Error::WrongReceiver);
+        }
+        Ok(ReceiverSession {
+            shared: Arc::clone(&self.shared),
+            actor,
         })
     }
 
@@ -426,7 +453,12 @@ impl State {
             if entry.epoch != stamp.generation {
                 return Err(Error::StaleAllocation);
             }
-            if entry.owner.is_none_or(|owner| owner.actor != source) {
+            if entry.owner
+                != Some(Owner {
+                    actor: source,
+                    slot: grant.source_owner_slot,
+                })
+            {
                 return Err(Error::OwnerMismatch);
             }
         }
@@ -445,13 +477,21 @@ impl State {
         Ok(())
     }
 
-    fn accept(&mut self, id: u64, owner_slot: OwnerId) -> Result<(), Error> {
+    fn accept(
+        &mut self,
+        id: u64,
+        receiver: ActorIdentity,
+        owner_slot: OwnerId,
+    ) -> Result<(), Error> {
         if owner_slot == 0 {
             return Err(Error::InvalidOwner);
         }
         let grant = self.grants.get(&id).ok_or(Error::GrantMissing)?;
         if grant.phase != Phase::Committed {
             return Err(Error::GrantState);
+        }
+        if grant.destination != receiver || self.destination != receiver {
+            return Err(Error::WrongReceiver);
         }
         for stamp in &grant.allocations {
             let Some(entry) = self.live.get(&stamp.id) else {
@@ -525,6 +565,14 @@ impl Drop for PendingTransfer {
     }
 }
 
+/// Opaque scheduler-granted identity. Fields are private, and external crates
+/// cannot mint one merely by writing a matching actor ID or generation.
+#[derive(Debug)]
+pub struct ReceiverSession {
+    shared: Shared,
+    actor: ActorIdentity,
+}
+
 /// Non-cloneable committed handoff. An unaccepted envelope is quarantined
 /// rather than silently restoring sender ownership or freeing live memory.
 /// Supervisor recovery must supply a separately proven destruction path.
@@ -536,13 +584,25 @@ pub struct ReceivedTransfer {
 }
 
 impl ReceivedTransfer {
-    pub fn accept(&mut self, destination_owner_slot: OwnerId) -> Result<(), Error> {
+    pub fn accept(
+        &mut self,
+        receiver: &ReceiverSession,
+        destination_owner_slot: OwnerId,
+    ) -> Result<(), Error> {
         if self.accepted {
             return Err(Error::GrantState);
         }
+        // Domain identity cannot be replaced with caller-controlled actor data.
+        if !Arc::ptr_eq(&self.shared, &receiver.shared) {
+            return Err(Error::WrongReceiver);
+        }
         let mut state = self.shared.lock().map_err(|_| Error::Poisoned)?;
-        state.accept(self.id, destination_owner_slot)?;
+        state.accept(self.id, receiver.actor, destination_owner_slot)?;
         self.accepted = true;
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "mailman_runtime_authority_v1_tests.rs"]
+mod tests;
