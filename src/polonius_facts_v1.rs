@@ -288,3 +288,219 @@ pub fn analyze(facts: &Facts) -> Result<Report, Error> {
         steps,
     })
 }
+
+
+/// A verified MIR use of one loan-bearing origin at an instruction point.
+///
+/// A terminal return carrying a borrow MUST appear as a use. Input argument
+/// loans MUST be represented by an entry-point issuance. These obligations
+/// cannot be established from the data supplied to this host-only oracle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct OriginUse {
+    pub point: PointId,
+    pub origin: OriginId,
+}
+
+/// Inferred origin lifetimes and the resulting pointwise loan report.
+///
+/// This is not a compiler proof: the MIR producer still must independently
+/// certify all uses, CFG edges, exceptional exits, issuances and invalidations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InferredReport {
+    pub live_origins_on_entry: BTreeMap<PointId, BTreeSet<OriginId>>,
+    pub loans: Report,
+    pub inference_steps: usize,
+}
+
+/// Backward MAY liveness from authenticated typed-MIR origin uses, then
+/// forward loan checking. This avoids extending a returned borrow through
+/// an alternate branch that never uses it.
+///
+/// For this API, the template's live_origins MUST be empty: no caller may
+/// smuggle manually chosen liveness into the derived result. Origins are
+/// conservative: this V1 inference has no overwrite/phi-kill facts, so it
+/// may retain loans longer than necessary. Missing MIR uses are UNSOUND;
+/// production callers must independently certify the complete use census.
+/// Existing V0/cyclic verifiers remain authoritative.
+pub fn analyze_with_inferred_liveness(
+    template: &Facts,
+    uses: &[OriginUse],
+) -> Result<InferredReport, Error> {
+    if template.points.is_empty()
+        || template.points.len() > MAX_POINTS
+        || uses.len() > MAX_INPUT_FACTS
+    {
+        return Err(error(Code::Budget, template.entry));
+    }
+
+    let mut points = BTreeMap::new();
+    let mut predecessors: BTreeMap<PointId, Vec<PointId>> = BTreeMap::new();
+    let mut live: BTreeMap<PointId, BTreeSet<OriginId>> = BTreeMap::new();
+    let mut origins = BTreeSet::new();
+    let mut declared_origins = BTreeSet::new();
+    let mut edge_count = 0usize;
+
+    for point in &template.points {
+        if point.id == 0 || !point.live_origins.is_empty() || points.insert(point.id, point).is_some()
+        {
+            return Err(error(Code::InvalidFact, point.id));
+        }
+        predecessors.insert(point.id, Vec::new());
+        live.insert(point.id, BTreeSet::new());
+        edge_count = edge_count
+            .checked_add(point.successors.len())
+            .ok_or_else(|| error(Code::Budget, point.id))?;
+        if edge_count > MAX_EDGES {
+            return Err(error(Code::Budget, point.id));
+        }
+        for &(origin, _) in &point.issue {
+            if origin == 0 {
+                return Err(error(Code::InvalidFact, point.id));
+            }
+            origins.insert(origin);
+            declared_origins.insert(origin);
+        }
+        for &(from, to) in &point.subset {
+            if from == 0 || to == 0 {
+                return Err(error(Code::InvalidFact, point.id));
+            }
+            origins.insert(from);
+            origins.insert(to);
+            declared_origins.insert(from);
+            declared_origins.insert(to);
+        }
+    }
+
+    if template.entry == 0 || !points.contains_key(&template.entry) {
+        return Err(error(Code::InvalidGraph, template.entry));
+    }
+    // Enforce the finite graph budget before allocating predecessor lists.
+    for point in &template.points {
+        for &succ in &point.successors {
+            let Some(preds) = predecessors.get_mut(&succ) else {
+                return Err(error(Code::InvalidGraph, point.id));
+            };
+            preds.push(point.id);
+        }
+    }
+
+    let mut seen_uses = BTreeSet::new();
+    for &used in uses {
+        if used.point == 0
+            || used.origin == 0
+            || !points.contains_key(&used.point)
+            || !seen_uses.insert(used)
+        {
+            return Err(error(Code::InvalidFact, used.point));
+        }
+        if !declared_origins.contains(&used.origin) {
+            return Err(error(Code::InvalidFact, used.point));
+        }
+        origins.insert(used.origin);
+        live.get_mut(&used.point)
+            .expect("validated use point")
+            .insert(used.origin);
+    }
+    if origins.len() > MAX_ORIGINS {
+        return Err(error(Code::Budget, template.entry));
+    }
+
+    // Each issued origin is needed at least at its issuance instruction.
+    for point in &template.points {
+        for &(origin, _) in &point.issue {
+            live.get_mut(&point.id)
+                .expect("validated issue point")
+                .insert(origin);
+        }
+    }
+
+    let mut retained = 0usize;
+    for (&id, origins_at_point) in &live {
+        if origins_at_point.len() > MAX_ORIGINS {
+            return Err(error(Code::Budget, id));
+        }
+        retained = retained
+            .checked_add(origins_at_point.len())
+            .ok_or_else(|| error(Code::Budget, id))?;
+    }
+    if retained > MAX_RETAINED_FACTS {
+        return Err(error(Code::Budget, template.entry));
+    }
+
+    let mut queue: VecDeque<PointId> = points.keys().copied().collect();
+    let mut pending: BTreeSet<PointId> = points.keys().copied().collect();
+    let mut steps = 0usize;
+    while let Some(id) = queue.pop_front() {
+        pending.remove(&id);
+        charge(&mut steps, 1, id)?;
+        let point = points[&id];
+        let mut needed = live[&id].clone();
+
+        // Backwards through *all* possible successors: a use on only the
+        // Some/return arm does NOT make that origin live in the None arm.
+        for &succ in &point.successors {
+            for &origin in &live[&succ] {
+                charge(&mut steps, 1, id)?;
+                needed.insert(origin);
+            }
+        }
+
+        // A target region used later also requires the source region of
+        // each local outlives/subset edge. Traverse the reverse closure.
+        let mut closure: VecDeque<OriginId> = needed.iter().copied().collect();
+        while let Some(target) = closure.pop_front() {
+            charge(&mut steps, 1, id)?;
+            for &(from, to) in &point.subset {
+                charge(&mut steps, 1, id)?;
+                if to == target && needed.insert(from) {
+                    if needed.len() > MAX_ORIGINS {
+                        return Err(error(Code::Budget, id));
+                    }
+                    closure.push_back(from);
+                }
+            }
+        }
+
+        let old_len = live[&id].len();
+        if needed.len() > MAX_ORIGINS {
+            return Err(error(Code::Budget, id));
+        }
+        if needed.len() > old_len {
+            retained = retained
+                .checked_add(needed.len() - old_len)
+                .ok_or_else(|| error(Code::Budget, id))?;
+            if retained > MAX_RETAINED_FACTS {
+                return Err(error(Code::Budget, id));
+            }
+            live.insert(id, needed);
+            for &pred in &predecessors[&id] {
+                charge(&mut steps, 1, id)?;
+                if pending.insert(pred) {
+                    queue.push_back(pred);
+                }
+            }
+        }
+    }
+
+    let enriched = Facts {
+        entry: template.entry,
+        points: template
+            .points
+            .iter()
+            .map(|point| {
+                let mut point = point.clone();
+                point.live_origins = live[&point.id].iter().copied().collect();
+                point
+            })
+            .collect(),
+    };
+
+    // This performs the existing independent CFG/fact structural preflight,
+    // bounded forward loan propagation and invalidation checks.
+    let loans = analyze(&enriched)?;
+    Ok(InferredReport {
+        live_origins_on_entry: live,
+        loans,
+        inference_steps: steps,
+    })
+}
