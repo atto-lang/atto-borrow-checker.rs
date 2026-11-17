@@ -6,6 +6,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_MODEL: AtomicU64 = AtomicU64::new(1);
 
+// Bounded host proof oracle. These are model resource budgets, NOT guest heap sizes.
+pub const MAX_TRACKED_OWNERS: usize = 4096;
+pub const MAX_LIVE_READ_VIEWS: usize = 16384;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HandleError {
     InvalidIdentity,
@@ -50,6 +54,7 @@ pub struct CheckedHandleModel {
     generation: u64,
     next_allocation: u64,
     next_lease: u64,
+    live_views: usize,
     slots: BTreeMap<u64, Slot>,
 }
 
@@ -59,10 +64,13 @@ impl CheckedHandleModel {
         let model = NEXT_MODEL.fetch_update(Ordering::Relaxed, Ordering::Relaxed,
             |n| n.checked_add(1)).map_err(|_| HandleError::Exhausted)?;
         Ok(Self { model, actor, generation, next_allocation: 1, next_lease: 1,
-            slots: BTreeMap::new() })
+            live_views: 0, slots: BTreeMap::new() })
     }
 
     pub fn mint_owner(&mut self) -> Result<Owned, HandleError> {
+        if self.slots.len() >= MAX_TRACKED_OWNERS {
+            return Err(HandleError::Exhausted);
+        }
         let id = self.next_allocation;
         let next = id.checked_add(1).ok_or(HandleError::Exhausted)?;
         self.slots.insert(id, Slot { borrowed_as_handle: false, readers: BTreeSet::new() });
@@ -93,23 +101,32 @@ impl CheckedHandleModel {
 
     pub fn deref(&mut self, handle: &Handle) -> Result<ReadView, HandleError> {
         if !handle.active { return Err(HandleError::InvalidHandle); }
+        if self.live_views >= MAX_LIVE_READ_VIEWS {
+            return Err(HandleError::Exhausted);
+        }
         self.verify(handle.key)?;
         let next = self.next_lease.checked_add(1).ok_or(HandleError::Exhausted)?;
         let slot = self.slots.get_mut(&handle.key.allocation).ok_or(HandleError::InvalidHandle)?;
         if !slot.borrowed_as_handle { return Err(HandleError::InvalidHandle); }
-        slot.readers.insert(self.next_lease);
+        if !slot.readers.insert(self.next_lease) {
+            return Err(HandleError::InvalidView);
+        }
         let lease = self.next_lease;
         self.next_lease = next;
+        self.live_views += 1;
         Ok(ReadView { key: handle.key, lease, active: true })
     }
 
     pub fn release_view(&mut self, view: &mut ReadView) -> Result<(), HandleError> {
-        if !view.active { return Err(HandleError::InvalidView); }
+        if !view.active || self.live_views == 0 {
+            return Err(HandleError::InvalidView);
+        }
         self.verify(view.key)?;
         let slot = self.slots.get_mut(&view.key.allocation).ok_or(HandleError::InvalidView)?;
         if !slot.borrowed_as_handle || !slot.readers.remove(&view.lease) {
             return Err(HandleError::InvalidView);
         }
+        self.live_views -= 1;
         view.active = false;
         Ok(())
     }
@@ -130,6 +147,7 @@ impl CheckedHandleModel {
         if next <= self.generation { return Err(HandleError::StaleGeneration); }
         self.generation = next;
         self.slots.clear();
+        self.live_views = 0;
         Ok(())
     }
 }
@@ -180,5 +198,60 @@ mod tests {
         assert_eq!(first.deref(&handle).unwrap_err(), HandleError::StaleGeneration);
         assert_eq!(first.advance_generation(2).unwrap_err(), HandleError::StaleGeneration);
         assert_eq!(CheckedHandleModel::new(0, 1).unwrap_err(), HandleError::InvalidIdentity);
+    }
+}
+
+#[cfg(test)]
+mod scoped_block_regressions {
+    use super::*;
+
+    #[test]
+    fn multiple_block_readers_must_retire_before_unwrap() {
+        let mut model = CheckedHandleModel::new(45, 1).unwrap();
+        let mut owner = model.mint_owner().unwrap();
+        let mut h = model.ref_owned(&mut owner).unwrap();
+        {
+            let mut first = model.deref(&h).unwrap();
+            let mut second = model.deref(&h).unwrap();
+            assert_eq!(model.unref(&mut h).unwrap_err(), HandleError::LiveViews);
+            // Model releases represent compiler-verified end of a lexical
+            // Atto block scope, not a physical Rust destructor proof.
+            model.release_view(&mut second).unwrap();
+            assert_eq!(model.unref(&mut h).unwrap_err(), HandleError::LiveViews);
+            model.release_view(&mut first).unwrap();
+        }
+        let restored = model.unref(&mut h).unwrap();
+        assert!(restored.active);
+    }
+
+    #[test]
+    fn owner_budget_denial_does_not_modify_previous_state() {
+        let mut model = CheckedHandleModel::new(45, 1).unwrap();
+        let mut first = model.mint_owner().unwrap();
+        for _ in 1..MAX_TRACKED_OWNERS {
+            model.mint_owner().unwrap();
+        }
+        assert_eq!(model.mint_owner().unwrap_err(), HandleError::Exhausted);
+        // Existing owner remains valid when the budget is exhausted.
+        let mut h = model.ref_owned(&mut first).unwrap();
+        let mut restored = model.unref(&mut h).unwrap();
+        let _next = model.ref_owned(&mut restored).unwrap();
+    }
+
+    #[test]
+    fn view_budget_denial_is_atomic_and_does_not_consume_handle() {
+        let mut model = CheckedHandleModel::new(45, 1).unwrap();
+        let mut owner = model.mint_owner().unwrap();
+        let mut h = model.ref_owned(&mut owner).unwrap();
+        let mut views = Vec::with_capacity(MAX_LIVE_READ_VIEWS);
+        for _ in 0..MAX_LIVE_READ_VIEWS {
+            views.push(model.deref(&h).unwrap());
+        }
+        assert_eq!(model.deref(&h).unwrap_err(), HandleError::Exhausted);
+        assert_eq!(model.unref(&mut h).unwrap_err(), HandleError::LiveViews);
+        for view in &mut views {
+            model.release_view(view).unwrap();
+        }
+        let _restored = model.unref(&mut h).unwrap();
     }
 }
