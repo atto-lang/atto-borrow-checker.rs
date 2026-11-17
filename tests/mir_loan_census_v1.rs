@@ -1,6 +1,4 @@
-use atto_borrow_checker::mir_loan_census_v1::{
-    project, BridgeError, Evidence, InstructionFacts,
-};
+use atto_borrow_checker::mir_loan_census_v1::{project, BridgeError, Evidence, InstructionFacts};
 use atto_borrow_checker::mir_v1::{
     Effect, Instruction, MirBlock, MirFunction, Producer, CONTRACT_VERSION,
 };
@@ -15,7 +13,12 @@ fn ins(id: u64, effect: Effect, operation: Op) -> Instruction {
         operation,
     }
 }
-fn row(id: u64, use_origins: &[u32], define_origins: &[u32], borrow_origin: Option<u32>) -> InstructionFacts {
+fn row(
+    id: u64,
+    use_origins: &[u32],
+    define_origins: &[u32],
+    borrow_origin: Option<u32>,
+) -> InstructionFacts {
     InstructionFacts {
         instruction_id: id,
         use_origins: use_origins.to_vec(),
@@ -24,7 +27,10 @@ fn row(id: u64, use_origins: &[u32], define_origins: &[u32], borrow_origin: Opti
     }
 }
 fn source() -> (MirFunction, Evidence) {
-    let traits = Traits { is_copy: false, is_send: false };
+    let traits = Traits {
+        is_copy: false,
+        is_send: false,
+    };
     let mir = MirFunction {
         version: CONTRACT_VERSION.into(),
         producer: Producer {
@@ -36,20 +42,46 @@ fn source() -> (MirFunction, Evidence) {
         entry: 0,
         expected_instruction_ids: (1..=8).collect(),
         blocks: vec![
-            MirBlock { id: 0, instructions: vec![
-                ins(1, Effect::Ownership, Op::Init { owner: 1, traits }),
-                ins(2, Effect::Ownership, Op::Borrow { owner: 1, loan: 7, kind: BorrowKind::Mutable }),
-            ], successors: vec![1, 2] },
-            MirBlock { id: 1, instructions: vec![
-                ins(3, Effect::Control, Op::Return),
-            ], successors: vec![] },
-            MirBlock { id: 2, instructions: vec![
-                ins(4, Effect::Ownership, Op::Write { owner: 1 }),
-                ins(5, Effect::Ownership, Op::EndBorrow { loan: 7 }),
-                ins(6, Effect::Ownership, Op::Init { owner: 2, traits }),
-                ins(7, Effect::Ownership, Op::Borrow { owner: 2, loan: 8, kind: BorrowKind::Mutable }),
-                ins(8, Effect::Control, Op::Return),
-            ], successors: vec![] },
+            MirBlock {
+                id: 0,
+                instructions: vec![
+                    ins(1, Effect::Ownership, Op::Init { owner: 1, traits }),
+                    ins(
+                        2,
+                        Effect::Ownership,
+                        Op::Borrow {
+                            owner: 1,
+                            loan: 7,
+                            kind: BorrowKind::Mutable,
+                        },
+                    ),
+                ],
+                successors: vec![1, 2],
+            },
+            MirBlock {
+                id: 1,
+                instructions: vec![ins(3, Effect::Control, Op::Return)],
+                successors: vec![],
+            },
+            MirBlock {
+                id: 2,
+                instructions: vec![
+                    ins(4, Effect::Ownership, Op::Write { owner: 1 }),
+                    ins(5, Effect::Ownership, Op::EndBorrow { loan: 7 }),
+                    ins(6, Effect::Ownership, Op::Init { owner: 2, traits }),
+                    ins(
+                        7,
+                        Effect::Ownership,
+                        Op::Borrow {
+                            owner: 2,
+                            loan: 8,
+                            kind: BorrowKind::Mutable,
+                        },
+                    ),
+                    ins(8, Effect::Control, Op::Return),
+                ],
+                successors: vec![],
+            },
         ],
     };
     let evidence = Evidence {
@@ -89,29 +121,44 @@ fn a_write_with_live_origin_does_not_escape_borrow_checks() {
 fn missing_instruction_census_is_rejected() {
     let (mir, mut evidence) = source();
     evidence.instruction_facts.pop();
-    assert_eq!(project(&mir, &evidence), Err(BridgeError::Invalid("E_DIAGNOSTIC_BUDGET_OR_INVENTORY")));
+    assert_eq!(
+        project(&mir, &evidence),
+        Err(BridgeError::Invalid("E_DIAGNOSTIC_BUDGET_OR_INVENTORY"))
+    );
 }
 #[test]
 fn duplicate_instruction_census_is_rejected() {
     let (mir, mut evidence) = source();
     evidence.instruction_facts[7] = evidence.instruction_facts[6].clone();
-    assert_eq!(project(&mir, &evidence), Err(BridgeError::Invalid("E_DIAGNOSTIC_DUPLICATE_FACT")));
+    assert_eq!(
+        project(&mir, &evidence),
+        Err(BridgeError::Invalid("E_DIAGNOSTIC_DUPLICATE_FACT"))
+    );
 }
 #[test]
 fn missing_borrow_origin_and_return_use_are_rejected() {
     let (mir, mut evidence) = source();
     evidence.instruction_facts[1].borrow_origin = None;
-    assert_eq!(project(&mir, &evidence), Err(BridgeError::Invalid("E_DIAGNOSTIC_BORROW_ORIGIN")));
+    assert_eq!(
+        project(&mir, &evidence),
+        Err(BridgeError::Invalid("E_DIAGNOSTIC_BORROW_ORIGIN"))
+    );
     let (mir, mut evidence) = source();
     evidence.instruction_facts[2].use_origins.clear();
-    assert_eq!(project(&mir, &evidence), Err(BridgeError::Invalid("E_DIAGNOSTIC_RETURN_WITNESS_REQUIRED")));
+    assert_eq!(
+        project(&mir, &evidence),
+        Err(BridgeError::Invalid("E_DIAGNOSTIC_RETURN_WITNESS_REQUIRED"))
+    );
 }
 #[test]
 fn unknown_or_actor_effects_must_not_disappear_from_census() {
     let (mut mir, evidence) = source();
     mir.blocks[2].instructions[0].operation = Op::ActorHopBorrow { owner: 1 };
     mir.blocks[2].instructions[0].effect = Effect::ActorBoundary;
-    assert_eq!(project(&mir, &evidence), Err(BridgeError::Invalid("E_DIAGNOSTIC_UNMODELED_OPERATION")));
+    assert_eq!(
+        project(&mir, &evidence),
+        Err(BridgeError::Invalid("E_DIAGNOSTIC_UNMODELED_OPERATION"))
+    );
 }
 #[test]
 fn stale_mir_source_inventory_is_rejected_before_lifetime_work() {
@@ -124,5 +171,8 @@ fn no_silent_acceptance_of_unknown_suspension() {
     let (mut mir, evidence) = source();
     mir.blocks[2].instructions[0].operation = Op::Suspend;
     mir.blocks[2].instructions[0].effect = Effect::Suspension;
-    assert_eq!(project(&mir, &evidence), Err(BridgeError::Invalid("E_DIAGNOSTIC_UNMODELED_OPERATION")));
+    assert_eq!(
+        project(&mir, &evidence),
+        Err(BridgeError::Invalid("E_DIAGNOSTIC_UNMODELED_OPERATION"))
+    );
 }
