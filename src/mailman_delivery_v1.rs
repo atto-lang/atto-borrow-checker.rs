@@ -7,6 +7,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 pub type AllocationId = u32;
+
+/// Identity includes physical domain and the slot's reuse generation.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct AllocationKey {
+    domain: u64,
+    id: AllocationId,
+    generation: u64,
+}
 const MAX_NODES: usize = 4096;
 const MAX_EDGES: usize = 16384;
 const MAX_TICKETS: usize = 4096;
@@ -34,6 +42,8 @@ pub enum SelectedDelivery {
 pub struct Allocation {
     pub id: AllocationId,
     pub owner_domain: u64,
+    /// Nonzero mint generation of the allocation, separate from actor epoch.
+    pub allocation_generation: u64,
     pub mutable: bool,
     pub sendable: bool,
     pub deep_copyable: bool,
@@ -126,12 +136,23 @@ impl Error {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VerifiedDelivery {
-    pub selected: SelectedDelivery,
-    pub reachable: Vec<AllocationId>,
-    pub ticket: u64,
-    pub ticket_generation: u64,
-    pub source_actor_generation: u64,
-    pub destination_actor_generation: u64,
+    selected: SelectedDelivery,
+    reachable: Vec<AllocationId>,
+    keys: Vec<AllocationKey>,
+    ticket: u64,
+    ticket_generation: u64,
+    source_actor_generation: u64,
+    destination_actor_generation: u64,
+}
+
+impl VerifiedDelivery {
+    pub fn selected(&self) -> SelectedDelivery {
+        self.selected
+    }
+
+    pub fn reachable(&self) -> &[AllocationId] {
+        &self.reachable
+    }
 }
 
 fn verify_inventory(inventory: &GraphInventory) -> Result<Vec<AllocationId>, Error> {
@@ -145,7 +166,8 @@ fn verify_inventory(inventory: &GraphInventory) -> Result<Vec<AllocationId>, Err
     let mut indexed = BTreeMap::new();
     let mut edges = 0usize;
     for node in &inventory.nodes {
-        if node.id == 0 || indexed.insert(node.id, node).is_some() {
+        if node.id == 0 || node.owner_domain == 0 || node.allocation_generation == 0
+            || indexed.insert(node.id, node).is_some() {
             return Err(Error::InvalidInventory);
         }
         edges = edges.saturating_add(node.references.len());
@@ -303,9 +325,25 @@ pub fn verify_delivery(
             }
         }
     };
+    let keys = reachable
+        .iter()
+        .map(|id| {
+            let node = inventory
+                .nodes
+                .iter()
+                .find(|node| node.id == *id)
+                .expect("verified reachability");
+            AllocationKey {
+                domain: node.owner_domain,
+                id: node.id,
+                generation: node.allocation_generation,
+            }
+        })
+        .collect();
     Ok(VerifiedDelivery {
         selected,
         reachable,
+        keys,
         ticket: request.ticket,
         ticket_generation: request.ticket_generation,
         source_actor_generation: request.source_actor_generation,
