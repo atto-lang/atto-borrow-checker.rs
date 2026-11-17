@@ -37,7 +37,10 @@ fn live_borrow_in_branch_blocks_mutation() {
     let mut invalidation = point(2, &[], &[10]);
     invalidation.invalidate.push(7);
     let error = run(vec![entry, invalidation, point(3, &[], &[])]).unwrap_err();
-    assert_eq!((error.code, error.point, error.loan), (Code::InvalidatedLoan, 2, Some(7)));
+    assert_eq!(
+        (error.code, error.point, error.loan),
+        (Code::InvalidatedLoan, 2, Some(7))
+    );
 }
 
 #[test]
@@ -48,7 +51,10 @@ fn joining_branches_unions_may_live_loans() {
     let right = point(3, &[4], &[]);
     let mut join = point(4, &[], &[10]);
     join.invalidate.push(7);
-    assert_eq!(run(vec![entry, left, right, join]).unwrap_err().code, Code::InvalidatedLoan);
+    assert_eq!(
+        run(vec![entry, left, right, join]).unwrap_err().code,
+        Code::InvalidatedLoan
+    );
 }
 
 #[test]
@@ -58,7 +64,10 @@ fn transitive_subsets_flow_through_dead_intermediate_origins() {
     let mut later = point(2, &[], &[30]);
     later.subset.extend([(10, 20), (20, 30)]);
     later.invalidate.push(7);
-    assert_eq!(run(vec![entry, later]).unwrap_err().code, Code::InvalidatedLoan);
+    assert_eq!(
+        run(vec![entry, later]).unwrap_err().code,
+        Code::InvalidatedLoan
+    );
 }
 
 #[test]
@@ -82,7 +91,9 @@ fn kill_affects_successor_not_current_invalidation() {
     run(vec![entry.clone(), kill.clone(), later]).unwrap();
     kill.invalidate.push(7);
     assert_eq!(
-        run(vec![entry, kill, point(3, &[], &[10])]).unwrap_err().code,
+        run(vec![entry, kill, point(3, &[], &[10])])
+            .unwrap_err()
+            .code,
         Code::InvalidatedLoan
     );
 }
@@ -105,7 +116,9 @@ fn cyclic_fixed_point_carries_loans_and_respects_kills() {
     let mut loop_point = point(2, &[2, 3], &[10]);
     loop_point.invalidate.push(7);
     assert_eq!(
-        run(vec![entry, loop_point, point(3, &[], &[])]).unwrap_err().code,
+        run(vec![entry, loop_point, point(3, &[], &[])])
+            .unwrap_err()
+            .code,
         Code::InvalidatedLoan
     );
 
@@ -140,11 +153,22 @@ fn issue_requires_live_origin_at_issuance() {
 #[test]
 fn cfg_must_be_complete_and_all_points_reachable() {
     let p = point(1, &[], &[]);
-    assert_eq!(run(vec![p.clone(), point(2, &[], &[])]).unwrap_err().code, Code::UnreachablePoint);
-    assert_eq!(run(vec![p.clone(), p]).unwrap_err().code, Code::InvalidGraph);
-    assert_eq!(run(vec![point(1, &[999], &[])]).unwrap_err().code, Code::InvalidGraph);
     assert_eq!(
-        run(vec![point(1, &[2, 2], &[]), point(2, &[], &[])]).unwrap_err().code,
+        run(vec![p.clone(), point(2, &[], &[])]).unwrap_err().code,
+        Code::UnreachablePoint
+    );
+    assert_eq!(
+        run(vec![p.clone(), p]).unwrap_err().code,
+        Code::InvalidGraph
+    );
+    assert_eq!(
+        run(vec![point(1, &[999], &[])]).unwrap_err().code,
+        Code::InvalidGraph
+    );
+    assert_eq!(
+        run(vec![point(1, &[2, 2], &[]), point(2, &[], &[])])
+            .unwrap_err()
+            .code,
         Code::InvalidGraph
     );
 }
@@ -160,7 +184,10 @@ fn duplicate_live_regions_and_subsets_are_rejected() {
 
 #[test]
 fn malformed_identifiers_and_kill_of_new_issue_are_rejected() {
-    assert_eq!(run(vec![point(0, &[], &[])]).unwrap_err().code, Code::InvalidGraph);
+    assert_eq!(
+        run(vec![point(0, &[], &[])]).unwrap_err().code,
+        Code::InvalidGraph
+    );
     let mut p = point(1, &[], &[10]);
     p.issue.push((10, 7));
     p.kill.push(7);
@@ -193,5 +220,8 @@ fn newly_issued_loans_follow_same_point_subset_edges() {
     let mut successor = point(2, &[], &[20]);
     successor.invalidate.push(7);
     let err = run(vec![entry, successor]).unwrap_err();
-    assert_eq!((err.code, err.point, err.loan), (Code::InvalidatedLoan, 2, Some(7)));
+    assert_eq!(
+        (err.code, err.point, err.loan),
+        (Code::InvalidatedLoan, 2, Some(7))
+    );
 }
