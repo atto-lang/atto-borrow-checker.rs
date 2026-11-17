@@ -69,6 +69,9 @@ pub struct BangSite {
     /// Proven by the native type/escape checker: copying through this loan
     /// produces an independent owned value with no borrowed referents.
     pub detached_copy_proven: bool,
+    /// Compiler-attested transitive immutable Sync/freeze eligibility.
+    /// The manifest cannot authenticate this witness by itself.
+    pub frozen_sync_proven: bool,
 }
 
 /// Source-owned census and mapping contract. An independently generated
@@ -107,6 +110,9 @@ fn expected_operation(site: &BangSite) -> Result<Op, BangError> {
     let owned = site.source_authority == SourceAuthority::Owned;
     if site.detached_copy_proven && (site.verb != Verb::Copy || owned) {
         return Err(invalid("E_BANG_UNUSED_DETACH_PROOF"));
+    }
+    if site.frozen_sync_proven && site.verb != Verb::Share {
+        return Err(invalid("E_BANG_UNUSED_SYNC_PROOF"));
     }
     match site.verb {
         Verb::Copy => {
@@ -169,8 +175,11 @@ fn expected_operation(site: &BangSite) -> Result<Op, BangError> {
             if missing_or_extra(site, false, false, true) {
                 return Err(invalid("E_BANG_OPERANDS"));
             }
-            // Never turn an unchecked Share into a proof. The MIR operation
-            // must explicitly carry its trusted transitive Sync witness.
+            // A matching caller-supplied bit is not independent proof: the
+            // backend type/escape checker must attest this witness.
+            if !site.frozen_sync_proven {
+                return Err(invalid("E_BANG_SYNC_PROOF_REQUIRED"));
+            }
             Ok(Op::PublishFrozen {
                 owner: site.from,
                 region: site.region.ok_or(invalid("E_BANG_OPERANDS"))?,
