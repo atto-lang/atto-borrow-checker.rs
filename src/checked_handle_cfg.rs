@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 pub const MAX_CFG_NODES: usize = 4096;
 pub const MAX_CFG_STATES: usize = 16384;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Action {
     Ref { handle: u32 },
     Deref { handle: u32, view: u32 },
@@ -85,16 +85,12 @@ pub fn verify_all_paths(cfg: &[Block], entry: usize) -> Result<(), FlowError> {
             return Err(FlowError::NoExit);
         }
     }
-    let mut pending = VecDeque::from([(entry, Facts::fresh())]);
+    let mut pending = VecDeque::from([(entry, Facts::fresh(), BTreeSet::<usize>::new())]);
     let mut seen = BTreeSet::new();
     let mut exits = 0usize;
-    while let Some((pc, mut state)) = pending.pop_front() {
-        if !seen.insert((pc, state.clone())) {
-            // A loop retaining a checked reference requires a separately
-            // verified cleanup/cancellation and forward-progress plan.
-            if state.has_live() { return Err(FlowError::LiveCycle); }
-            continue;
-        }
+    while let Some((pc, mut state, ancestors)) = pending.pop_front() {
+        // Joins with identical facts are benign, unlike genuine CFG cycles.
+        if !seen.insert((pc, state.clone())) { continue; }
         if seen.len() > MAX_CFG_STATES { return Err(FlowError::Budget); }
         let block = &cfg[pc];
         match block.action {
@@ -133,8 +129,13 @@ pub fn verify_all_paths(cfg: &[Block], entry: usize) -> Result<(), FlowError> {
             Action::Suspend if state.has_live() => return Err(FlowError::UnsafeSuspend),
             Action::CallUnknown | Action::Suspend | Action::Nop => {}
         }
+        let mut next_ancestors = ancestors;
+        next_ancestors.insert(pc);
         for &next in &block.successors {
-            pending.push_back((next, state.clone()));
+            if next_ancestors.contains(&next) && state.has_live() {
+                return Err(FlowError::LiveCycle);
+            }
+            pending.push_back((next, state.clone(), next_ancestors.clone()));
         }
     }
     if exits == 0 { return Err(FlowError::NoExit); }
