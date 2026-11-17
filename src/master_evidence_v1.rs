@@ -7,9 +7,7 @@
 use std::collections::BTreeSet;
 
 use crate::mir_v1::{MirFunction, Producer};
-use crate::ownership_bang_v1::{
-    verify_bang_mir, BangError, BangManifest, SourceAuthority, Verb,
-};
+use crate::ownership_bang_v1::{verify_bang_mir, BangError, BangManifest, SourceAuthority, Verb};
 use crate::{Op, OwnerId, Proof};
 
 pub const CONTRACT_VERSION: &str = "atto-master-evidence-v1";
@@ -94,13 +92,31 @@ pub fn verify_strict(
                         insert(&mut requirements, id, node, *owner, ProofKind::SendTrait)?;
                     }
                 }
-                Op::Borrow { owner, kind: crate::BorrowKind::Mutable, .. } => {
+                Op::Borrow {
+                    owner,
+                    kind: crate::BorrowKind::Mutable,
+                    ..
+                } => {
                     insert(&mut requirements, id, node, *owner, ProofKind::MutablePlace)?;
                 }
-                Op::CopyThrough { owner, detached_proven: true, .. } => {
-                    insert(&mut requirements, id, node, *owner, ProofKind::DetachedOwnedCopy)?;
+                Op::CopyThrough {
+                    owner,
+                    detached_proven: true,
+                    ..
+                } => {
+                    insert(
+                        &mut requirements,
+                        id,
+                        node,
+                        *owner,
+                        ProofKind::DetachedOwnedCopy,
+                    )?;
                 }
-                Op::PublishFrozen { owner, sync_proven: true, .. } => {
+                Op::PublishFrozen {
+                    owner,
+                    sync_proven: true,
+                    ..
+                } => {
                     insert(&mut requirements, id, node, *owner, ProofKind::FrozenSync)?;
                 }
                 _ => {}
