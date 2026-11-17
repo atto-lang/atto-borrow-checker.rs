@@ -109,10 +109,18 @@ pub struct CompilerBoundTransfer {
 }
 
 impl CompilerBoundTransfer {
-    pub fn source_node_id(&self) -> u64 { self.source_node_id }
-    pub fn owner(&self) -> OwnerId { self.owner }
-    pub fn compiler_git_sha(&self) -> &str { &self.compiler_git_sha }
-    pub fn source_sha256(&self) -> &str { &self.source_sha256 }
+    pub fn source_node_id(&self) -> u64 {
+        self.source_node_id
+    }
+    pub fn owner(&self) -> OwnerId {
+        self.owner
+    }
+    pub fn compiler_git_sha(&self) -> &str {
+        &self.compiler_git_sha
+    }
+    pub fn source_sha256(&self) -> &str {
+        &self.source_sha256
+    }
 }
 
 pub fn verify_compiler_transfer(
@@ -139,12 +147,15 @@ pub fn verify_compiler_transfer(
     let mut sites = BTreeMap::new();
     let mut census_tickets = BTreeSet::new();
     for site in &census.source_transfer_sites {
-        if site.instruction_id == 0 || site.source_node_id == 0
-            || site.owner == 0 || site.ticket == 0 {
+        if site.instruction_id == 0
+            || site.source_node_id == 0
+            || site.owner == 0
+            || site.ticket == 0
+        {
             return Err(Error::InvalidSite);
         }
-        if sites.insert(site.instruction_id, site).is_some()
-            || !census_tickets.insert(site.ticket) {
+        if sites.insert(site.instruction_id, site).is_some() || !census_tickets.insert(site.ticket)
+        {
             return Err(Error::DuplicateSite);
         }
     }
@@ -163,15 +174,23 @@ pub fn verify_compiler_transfer(
                         return Err(Error::IncompleteCensus);
                     };
                     if site.source_node_id != instruction.source_node_id
-                        || site.owner != *owner || site.ticket != *ticket {
+                        || site.owner != *owner
+                        || site.ticket != *ticket
+                    {
                         return Err(Error::SendSiteMismatch);
                     }
                     observed.insert(instruction.instruction_id);
                 }
-                Op::ActorSendCommit { ticket } => { commits.insert(*ticket); }
-                Op::ActorSendAbort { ticket } => { aborts.insert(*ticket); }
-                Op::ActorSendMove { .. } | Op::ActorSendCopy { .. }
-                | Op::ActorHopBorrow { .. } | Op::PublishFrozen { .. }
+                Op::ActorSendCommit { ticket } => {
+                    commits.insert(*ticket);
+                }
+                Op::ActorSendAbort { ticket } => {
+                    aborts.insert(*ticket);
+                }
+                Op::ActorSendMove { .. }
+                | Op::ActorSendCopy { .. }
+                | Op::ActorHopBorrow { .. }
+                | Op::PublishFrozen { .. }
                 | Op::PromoteGuarded { .. } => {
                     return Err(Error::UnsupportedActorEffect);
                 }
@@ -182,17 +201,26 @@ pub fn verify_compiler_transfer(
     if observed.len() != sites.len() {
         return Err(Error::IncompleteCensus);
     }
-    if census_tickets.iter().any(|id| !commits.contains(id) || !aborts.contains(id)) {
+    if census_tickets
+        .iter()
+        .any(|id| !commits.contains(id) || !aborts.contains(id))
+    {
         return Err(Error::MissingCommitOrRollback);
     }
     let Ok(ticket) = SendTicketId::try_from(request.ticket) else {
         return Err(Error::InvalidSite);
     };
-    let Some(site) = census.source_transfer_sites.iter().find(|s| s.ticket == ticket) else {
+    let Some(site) = census
+        .source_transfer_sites
+        .iter()
+        .find(|s| s.ticket == ticket)
+    else {
         return Err(Error::SendSiteMismatch);
     };
-    if request.source_domain == 0 || request.destination_domain == 0
-        || request.source_domain != request.destination_domain {
+    if request.source_domain == 0
+        || request.destination_domain == 0
+        || request.source_domain != request.destination_domain
+    {
         return Err(Error::WrongDomain);
     }
     let delivery = verify_delivery(graph, request)?;
@@ -211,13 +239,23 @@ pub fn verify_compiler_transfer(
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum State { Pending, Committed }
+enum State {
+    Pending,
+    Committed,
+}
 
 #[derive(Clone, Copy, Debug)]
-struct OwnedTicket { mailman: u32, state: State }
+struct OwnedTicket {
+    mailman: u32,
+    state: State,
+}
 
 #[derive(Clone, Copy, Debug)]
-struct Quota { capacity: usize, reserved: usize, committed: usize }
+struct Quota {
+    capacity: usize,
+    reserved: usize,
+    committed: usize,
+}
 
 /// One broker is shared by *all* Mailmen within the same actor/heap domain.
 /// Its exclusive mutable borrow serializes model decisions. Production needs
@@ -238,17 +276,31 @@ impl SharedTransferBroker {
         global_capacity: usize,
         mailman_capacities: &[(u32, usize)],
     ) -> Result<Self, Error> {
-        if domain == 0 || destination_generation == 0
-            || global_capacity == 0 || global_capacity > MAX_CAPACITY
-            || mailman_capacities.is_empty() || mailman_capacities.len() > MAX_MAILMEN {
+        if domain == 0
+            || destination_generation == 0
+            || global_capacity == 0
+            || global_capacity > MAX_CAPACITY
+            || mailman_capacities.is_empty()
+            || mailman_capacities.len() > MAX_MAILMEN
+        {
             return Err(Error::InvalidBroker);
         }
         let mut mailmen = BTreeMap::new();
         for (id, cap) in mailman_capacities {
-            if *id == 0 || *cap == 0 || *cap > MAX_CAPACITY
-                || mailmen.insert(*id, Quota {
-                    capacity: *cap, reserved: 0, committed: 0
-                }).is_some() {
+            if *id == 0
+                || *cap == 0
+                || *cap > MAX_CAPACITY
+                || mailmen
+                    .insert(
+                        *id,
+                        Quota {
+                            capacity: *cap,
+                            reserved: 0,
+                            committed: 0,
+                        },
+                    )
+                    .is_some()
+            {
                 return Err(Error::InvalidBroker);
             }
         }
@@ -278,14 +330,28 @@ impl SharedTransferBroker {
         // allocation epochs. Failed admission changes neither local quota.
         self.ledger.prepare(&proof.delivery)?;
         let key = (proof.delivery.ticket(), proof.delivery.ticket_generation());
-        self.tickets.insert(key, OwnedTicket { mailman, state: State::Pending });
-        let quota = self.mailmen.get_mut(&mailman).ok_or(Error::InvalidMailman)?;
+        self.tickets.insert(
+            key,
+            OwnedTicket {
+                mailman,
+                state: State::Pending,
+            },
+        );
+        let quota = self
+            .mailmen
+            .get_mut(&mailman)
+            .ok_or(Error::InvalidMailman)?;
         quota.reserved += 1;
         Ok(())
     }
 
-    fn check_ticket(&self, mailman: u32, ticket: u64, generation: u64, expected: State)
-        -> Result<(), Error> {
+    fn check_ticket(
+        &self,
+        mailman: u32,
+        ticket: u64,
+        generation: u64,
+        expected: State,
+    ) -> Result<(), Error> {
         let Some(record) = self.tickets.get(&(ticket, generation)) else {
             return Err(Error::UnknownTicket);
         };
@@ -303,7 +369,10 @@ impl SharedTransferBroker {
         if !self.ledger.commit(ticket, generation)? {
             return Err(Error::UnsupportedDeliveryMode);
         }
-        let quota = self.mailmen.get_mut(&mailman).ok_or(Error::InvalidMailman)?;
+        let quota = self
+            .mailmen
+            .get_mut(&mailman)
+            .ok_or(Error::InvalidMailman)?;
         quota.reserved -= 1;
         quota.committed += 1;
         if let Some(record) = self.tickets.get_mut(&(ticket, generation)) {
@@ -315,7 +384,10 @@ impl SharedTransferBroker {
     pub fn abort(&mut self, mailman: u32, ticket: u64, generation: u64) -> Result<(), Error> {
         self.check_ticket(mailman, ticket, generation, State::Pending)?;
         self.ledger.abort(ticket, generation)?;
-        let quota = self.mailmen.get_mut(&mailman).ok_or(Error::InvalidMailman)?;
+        let quota = self
+            .mailmen
+            .get_mut(&mailman)
+            .ok_or(Error::InvalidMailman)?;
         quota.reserved -= 1;
         self.tickets.remove(&(ticket, generation));
         Ok(())
@@ -324,13 +396,18 @@ impl SharedTransferBroker {
     pub fn finish(&mut self, mailman: u32, ticket: u64, generation: u64) -> Result<(), Error> {
         self.check_ticket(mailman, ticket, generation, State::Committed)?;
         self.ledger.finish(ticket, generation)?;
-        let quota = self.mailmen.get_mut(&mailman).ok_or(Error::InvalidMailman)?;
+        let quota = self
+            .mailmen
+            .get_mut(&mailman)
+            .ok_or(Error::InvalidMailman)?;
         quota.committed -= 1;
         self.tickets.remove(&(ticket, generation));
         Ok(())
     }
 
     pub fn counts(&self, mailman: u32) -> Option<(usize, usize)> {
-        self.mailmen.get(&mailman).map(|q| (q.reserved, q.committed))
+        self.mailmen
+            .get(&mailman)
+            .map(|q| (q.reserved, q.committed))
     }
 }
