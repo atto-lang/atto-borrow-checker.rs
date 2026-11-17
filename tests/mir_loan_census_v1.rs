@@ -177,7 +177,6 @@ fn no_silent_acceptance_of_unknown_suspension() {
     );
 }
 
-
 #[test]
 fn oversized_nested_use_census_is_rejected_before_solver_copy() {
     let (mir, mut evidence) = source();
@@ -198,15 +197,23 @@ fn mass_write_invalidation_cannot_multiply_into_unbounded_facts() {
         additions.push(ins(
             next_id,
             Effect::Ownership,
-            Op::Borrow { owner: 1, loan, kind: BorrowKind::Mutable },
+            Op::Borrow {
+                owner: 1,
+                loan,
+                kind: BorrowKind::Mutable,
+            },
         ));
-        evidence.instruction_facts.push(row(next_id, &[], &[], None));
+        evidence
+            .instruction_facts
+            .push(row(next_id, &[], &[], None));
         mir.expected_instruction_ids.push(next_id);
         next_id += 1;
     }
     for _ in 0..400 {
         additions.push(ins(next_id, Effect::Ownership, Op::Write { owner: 1 }));
-        evidence.instruction_facts.push(row(next_id, &[], &[], None));
+        evidence
+            .instruction_facts
+            .push(row(next_id, &[], &[], None));
         mir.expected_instruction_ids.push(next_id);
         next_id += 1;
     }
@@ -228,7 +235,9 @@ fn unrelated_ssa_origin_cannot_fake_a_borrowed_return_witness() {
     evidence.instruction_facts[2].use_origins = vec![99];
     assert_eq!(
         project(&mir, &evidence),
-        Err(BridgeError::Invalid("E_DIAGNOSTIC_RETURN_BORROW_PROVENANCE"))
+        Err(BridgeError::Invalid(
+            "E_DIAGNOSTIC_RETURN_BORROW_PROVENANCE"
+        ))
     );
 }
 
