@@ -184,3 +184,14 @@ fn proof_and_work_are_deterministic_across_block_listing_order() {
     let b = run(vec![right, entry, left]).unwrap();
     assert_eq!(a, b);
 }
+
+#[test]
+fn newly_issued_loans_follow_same_point_subset_edges() {
+    let mut entry = point(1, &[2], &[10]);
+    entry.issue.push((10, 7));
+    entry.subset.push((10, 20));
+    let mut successor = point(2, &[], &[20]);
+    successor.invalidate.push(7);
+    let err = run(vec![entry, successor]).unwrap_err();
+    assert_eq!((err.code, err.point, err.loan), (Code::InvalidatedLoan, 2, Some(7)));
+}
