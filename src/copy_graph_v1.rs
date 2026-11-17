@@ -13,6 +13,8 @@ pub type FieldId = u32;
 
 pub const MAX_COPY_TYPES: usize = 4096;
 pub const MAX_COPY_FIELDS: usize = 65536;
+/// Bound recursive *type* traversal independently of distinct-type budget.
+pub const MAX_COPY_DEPTH: usize = 128;
 
 /// Mutability / ownership meaning of an actual stored field. Never infer this
 /// from raw memory layout, a user annotation, or erased Object type alone.
@@ -91,7 +93,7 @@ fn check_type(
     visited: &mut BTreeSet<TypeId>,
     depth: usize,
 ) -> Result<(), Error> {
-    if depth >= MAX_COPY_TYPES {
+    if depth >= MAX_COPY_DEPTH {
         return Err(Error("E_COPY_GRAPH_BUDGET"));
     }
     if pending.contains(&id) {
@@ -178,6 +180,24 @@ pub fn admit_copy(descriptors: &[TypeDescriptor], request: CopyRequest) -> Resul
         if ty.parent == Some(ty.id) {
             return Err(Error("E_COPY_LAYOUT"));
         }
+    }
+    // Check *all* nominal parent chains iteratively, even if the selected
+    // static type equals the concrete type. A malicious descriptor must not
+    // smuggle an inheritance cycle into a generated AOT layout.
+    let mut validated_ancestors = BTreeSet::new();
+    for ty in descriptors {
+        let mut path = BTreeSet::new();
+        let mut cur = Some(ty.id);
+        while let Some(id) = cur {
+            if validated_ancestors.contains(&id) {
+                break;
+            }
+            if !path.insert(id) {
+                return Err(Error("E_COPY_LAYOUT"));
+            }
+            cur = all.get(&id).ok_or(Error("E_COPY_AOT_WITNESS"))?.parent;
+        }
+        validated_ancestors.extend(path);
     }
     // An upcast may only refer to a verified nominal ancestor. Never slice an
     // unknown or erased Object reference to its declared base class.
