@@ -108,10 +108,11 @@ fn check_type(
     if actor_send && !ty.sendable {
         return Err(Error("E_COPY_SENDABLE"));
     }
-    if match mode {
-        CopyMode::Shallow => !ty.shallow_copy_witness,
-        CopyMode::Deep => !ty.deep_copy_witness,
-    } {
+    let witness_proven = match mode {
+        CopyMode::Shallow => ty.shallow_copy_witness,
+        CopyMode::Deep => ty.deep_copy_witness,
+    };
+    if !witness_proven {
         return Err(Error("E_COPY_AOT_WITNESS"));
     }
     pending.insert(id);
