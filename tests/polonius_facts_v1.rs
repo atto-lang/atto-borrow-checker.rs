@@ -225,3 +225,194 @@ fn newly_issued_loans_follow_same_point_subset_edges() {
         (Code::InvalidatedLoan, 2, Some(7))
     );
 }
+
+
+// The following tests derive region liveness rather than manually supplying
+// live_origins, reproducing Polonius Alpha's get_mut / None / insert scenario.
+mod inferred_liveness {
+    use atto_borrow_checker::polonius_facts_v1::{
+        analyze_with_inferred_liveness, Code, Error, Facts, InferredReport, OriginUse, Point,
+    };
+
+    fn point(id: u32, successors: &[u32]) -> Point {
+        Point {
+            id,
+            successors: successors.to_vec(),
+            live_origins: vec![],
+            subset: vec![],
+            issue: vec![],
+            kill: vec![],
+            invalidate: vec![],
+        }
+    }
+
+    fn check(points: Vec<Point>, uses: &[(u32, u32)]) -> Result<InferredReport, Error> {
+        analyze_with_inferred_liveness(
+            &Facts { entry: 1, points },
+            &uses
+                .iter()
+                .map(|&(point, origin)| OriginUse { point, origin })
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    #[test]
+    fn hashmap_get_mut_some_return_none_insert_retry_passes() {
+        // 1: initial get_mut issues L1 into origin 10; branch to Some or None.
+        // 2: Some(value) => return value (only branch that uses region 10).
+        // 3: None => map.insert (invalidates L1 if L1 were live).
+        // 4: map.get_mut again issues a distinct L2 into origin 20.
+        // 5: return the new mutable value through L2.
+        let mut lookup = point(1, &[2, 3]);
+        lookup.issue.push((10, 7));
+        let some_return = point(2, &[]);
+        let mut insert = point(3, &[4]);
+        insert.invalidate.push(7);
+        let mut retry = point(4, &[5]);
+        retry.issue.push((20, 8));
+        let second_return = point(5, &[]);
+
+        let result = check(
+            vec![lookup, some_return, insert, retry, second_return],
+            &[(2, 10), (5, 20)],
+        )
+        .unwrap();
+
+        assert!(result.live_origins_on_entry[&2].contains(&10));
+        assert!(!result.live_origins_on_entry[&3].contains(&10));
+        assert!(!result.live_origins_on_entry[&4].contains(&10));
+        assert!(result.live_origins_on_entry[&5].contains(&20));
+        assert!(result.loans.live_loans_on_entry[&2].contains(&7));
+        assert!(!result.loans.live_loans_on_entry[&3].contains(&7));
+        assert!(result.loans.live_loans_on_entry[&5].contains(&8));
+    }
+
+    #[test]
+    fn insertion_rejected_when_original_loan_is_used_on_none_path() {
+        let mut lookup = point(1, &[2, 3]);
+        lookup.issue.push((10, 7));
+        let some_return = point(2, &[]);
+        let mut insert = point(3, &[]);
+        insert.invalidate.push(7);
+        let err = check(vec![lookup, some_return, insert], &[(2, 10), (3, 10)]).unwrap_err();
+        assert_eq!((err.code, err.point, err.loan), (Code::InvalidatedLoan, 3, Some(7)));
+    }
+
+    #[test]
+    fn mutation_on_some_path_is_rejected() {
+        let mut lookup = point(1, &[2, 3]);
+        lookup.issue.push((10, 7));
+        let mut some = point(2, &[]);
+        some.invalidate.push(7);
+        let none = point(3, &[]);
+        let err = check(vec![lookup, some, none], &[(2, 10)]).unwrap_err();
+        assert_eq!((err.code, err.point, err.loan), (Code::InvalidatedLoan, 2, Some(7)));
+    }
+
+    #[test]
+    fn join_use_keeps_loan_live_on_both_predecessor_branches() {
+        let mut lookup = point(1, &[2, 3]);
+        lookup.issue.push((10, 7));
+        let left = point(2, &[4]);
+        let mut right = point(3, &[4]);
+        right.invalidate.push(7);
+        let join = point(4, &[]);
+        let err = check(vec![lookup, left, right, join], &[(4, 10)]).unwrap_err();
+        assert_eq!((err.code, err.point, err.loan), (Code::InvalidatedLoan, 3, Some(7)));
+    }
+
+    #[test]
+    fn outlives_subset_infers_source_loan_from_return_target_use() {
+        let mut lookup = point(1, &[2]);
+        lookup.issue.push((10, 7));
+        lookup.subset.extend([(10, 20), (20, 30)]);
+        let mut returned = point(2, &[]);
+        returned.invalidate.push(7);
+        let err = check(vec![lookup, returned], &[(2, 30)]).unwrap_err();
+        assert_eq!((err.code, err.point, err.loan), (Code::InvalidatedLoan, 2, Some(7)));
+    }
+
+    #[test]
+    fn subset_direction_does_not_invent_reverse_loan() {
+        let mut lookup = point(1, &[2]);
+        lookup.issue.push((20, 7));
+        lookup.subset.push((10, 20));
+        let mut returned = point(2, &[]);
+        returned.invalidate.push(7);
+        let result = check(vec![lookup, returned], &[(2, 10)]).unwrap();
+        assert!(!result.loans.live_loans_on_entry[&2].contains(&7));
+    }
+
+    #[test]
+    fn loop_backedge_retains_loan_when_used_on_exit() {
+        let mut lookup = point(1, &[2]);
+        lookup.issue.push((10, 7));
+        let mut loop_body = point(2, &[2, 3]);
+        loop_body.invalidate.push(7);
+        let exit = point(3, &[]);
+        let err = check(vec![lookup, loop_body, exit], &[(3, 10)]).unwrap_err();
+        assert_eq!((err.code, err.point, err.loan), (Code::InvalidatedLoan, 2, Some(7)));
+    }
+
+    #[test]
+    fn dead_loan_can_be_killed_before_mutation() {
+        let mut lookup = point(1, &[2]);
+        lookup.issue.push((10, 7));
+        let mut end_loan = point(2, &[3]);
+        end_loan.kill.push(7);
+        let mut mutation = point(3, &[]);
+        mutation.invalidate.push(7);
+        check(vec![lookup, end_loan, mutation], &[]).unwrap();
+    }
+
+    #[test]
+    fn rejects_untrusted_manual_live_origins_and_unknown_use_point() {
+        let mut lookup = point(1, &[]);
+        lookup.issue.push((10, 7));
+        lookup.live_origins.push(10);
+        let err = check(vec![lookup], &[]).unwrap_err();
+        assert_eq!(err.code, Code::InvalidFact);
+
+        let mut lookup = point(1, &[]);
+        lookup.issue.push((10, 7));
+        let err = check(vec![lookup], &[(99, 10)]).unwrap_err();
+        assert_eq!(err.code, Code::InvalidFact);
+    }
+
+    #[test]
+    fn rejects_undeclared_or_duplicate_or_zero_origin_uses() {
+        let mut lookup = point(1, &[]);
+        lookup.issue.push((10, 7));
+        let err = check(vec![lookup.clone()], &[(1, 99)]).unwrap_err();
+        assert_eq!(err.code, Code::InvalidFact);
+        let err = check(vec![lookup.clone()], &[(1, 10), (1, 10)]).unwrap_err();
+        assert_eq!(err.code, Code::InvalidFact);
+        let err = check(vec![lookup], &[(1, 0)]).unwrap_err();
+        assert_eq!(err.code, Code::InvalidFact);
+    }
+
+    #[test]
+    fn inferred_result_is_independent_of_point_listing_order() {
+        let mut entry = point(1, &[2, 3]);
+        entry.issue.push((10, 7));
+        let returned = point(2, &[]);
+        let mut inserted = point(3, &[]);
+        inserted.invalidate.push(7);
+        let a = check(
+            vec![entry.clone(), returned.clone(), inserted.clone()],
+            &[(2, 10)],
+        )
+        .unwrap();
+        let b = check(vec![inserted, entry, returned], &[(2, 10)]).unwrap();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn huge_untrusted_use_census_rejected_before_worklist() {
+        let mut entry = point(1, &[]);
+        entry.issue.push((10, 7));
+        let uses = vec![(1, 10); 100_001];
+        let err = check(vec![entry], &uses).unwrap_err();
+        assert_eq!(err.code, Code::Budget);
+    }
+}
