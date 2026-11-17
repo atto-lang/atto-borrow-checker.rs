@@ -134,7 +134,9 @@ pub fn project(
                     }
                     // The provenance witness must be present on an actual
                     // MIR Borrow, never on a free-standing caller fact.
-                    if let Some(origin) = facts_by_instruction[&instruction.instruction_id].borrow_origin {
+                    if let Some(origin) =
+                        facts_by_instruction[&instruction.instruction_id].borrow_origin
+                    {
                         if origin != 0 {
                             borrowed_origins.insert(origin);
                         }
@@ -152,7 +154,8 @@ pub fn project(
     }
     // Each destructive MIR instruction invalidates ALL loans in this
     // conservative alias model. Cap the expanded fact set up front.
-    let expanded = issued_loans.len()
+    let expanded = issued_loans
+        .len()
         .checked_mul(invalidating_operations)
         .and_then(|n| n.checked_add(fact_count))
         .ok_or(BridgeError::Invalid("E_DIAGNOSTIC_FACT_BUDGET"))?;
@@ -167,8 +170,14 @@ pub fn project(
     let mut phi_sources = BTreeMap::<OriginId, BTreeSet<OriginId>>::new();
     let mut phi_dependents = BTreeMap::<OriginId, BTreeSet<OriginId>>::new();
     for edge in &evidence.phi_edges {
-        phi_sources.entry(edge.destination).or_default().insert(edge.source);
-        phi_dependents.entry(edge.source).or_default().insert(edge.destination);
+        phi_sources
+            .entry(edge.destination)
+            .or_default()
+            .insert(edge.source);
+        phi_dependents
+            .entry(edge.source)
+            .or_default()
+            .insert(edge.destination);
     }
     let mut remaining: BTreeMap<OriginId, usize> = phi_sources
         .iter()
@@ -178,7 +187,9 @@ pub fn project(
     while let Some(origin) = queue.pop_front() {
         if let Some(destinations) = phi_dependents.get(&origin) {
             for &destination in destinations {
-                let count = remaining.get_mut(&destination).expect("indexed phi destination");
+                let count = remaining
+                    .get_mut(&destination)
+                    .expect("indexed phi destination");
                 if *count > 0 {
                     *count -= 1;
                     if *count == 0 && borrowed_origins.insert(destination) {
@@ -275,9 +286,14 @@ pub fn project(
                         return Err(BridgeError::Invalid("E_DIAGNOSTIC_RETURN_WITNESS_REQUIRED"));
                     }
                     if !issued_loans.is_empty()
-                        && !row.use_origins.iter().any(|origin| borrowed_origins.contains(origin))
+                        && !row
+                            .use_origins
+                            .iter()
+                            .any(|origin| borrowed_origins.contains(origin))
                     {
-                        return Err(BridgeError::Invalid("E_DIAGNOSTIC_RETURN_BORROW_PROVENANCE"));
+                        return Err(BridgeError::Invalid(
+                            "E_DIAGNOSTIC_RETURN_BORROW_PROVENANCE",
+                        ));
                     }
                 }
                 _ => return Err(BridgeError::Invalid("E_DIAGNOSTIC_UNMODELED_OPERATION")),
