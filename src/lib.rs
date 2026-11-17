@@ -76,6 +76,9 @@ pub enum Op {
         owner: OwnerId,
         loan: LoanId,
         into: OwnerId,
+        /// An independently derived proof that this copy is a detached value,
+        /// not a copy of an address/borrowed capability into a new owner.
+        detached_proven: bool,
     },
     EndBorrow {
         loan: LoanId,
@@ -355,13 +358,21 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
                 return Err(bad("E_LOAN_NOT_ACTIVE_OR_WRONG_OWNER"));
             }
         }
-        Op::CopyThrough { owner, loan, into } => {
+        Op::CopyThrough {
+            owner,
+            loan,
+            into,
+            detached_proven,
+        } => {
             let source = state.live.get(&owner).ok_or_else(|| bad("E_USE_AFTER_MOVE_OR_DROP"))?;
             if !matches!(state.loans.get(&loan), Some(Loan { owner: o, .. }) if *o == owner) {
                 return Err(bad("E_LOAN_NOT_ACTIVE_OR_WRONG_OWNER"));
             }
             if !source.traits.is_copy {
                 return Err(bad("E_COPY_PROOF_REQUIRED"));
+            }
+            if !detached_proven {
+                return Err(bad("E_DETACHED_COPY_PROOF_REQUIRED"));
             }
             if !fresh_destination(state, into) {
                 return Err(bad("E_OWNER_ID_REUSED_OR_BUDGET"));
