@@ -135,10 +135,7 @@ fn untracked_nested_alias_blocks_transfer_and_copy_until_guarded() {
     req.allow_elision = true;
     req.source_observable_after_send = false;
     req.copy_identity_or_hooks_observable = false;
-    assert_eq!(
-        err(&graph, &req),
-        Error::OwnershipNotExclusive
-    );
+    assert_eq!(err(&graph, &req), Error::OwnershipNotExclusive);
 }
 
 #[test]
@@ -629,7 +626,10 @@ fn original_remote_receiver_lease_must_finish_before_reclamation() {
     assert_eq!(ledger.finish(9, 5), Err(Error::LeaseStillActive));
     ledger.enter_lease_user(9, 5).unwrap();
     ledger.release_receiver_lease(9, 5).unwrap();
-    assert_eq!(ledger.release_receiver_lease(9, 5), Err(Error::LeaseStillActive));
+    assert_eq!(
+        ledger.release_receiver_lease(9, 5),
+        Err(Error::LeaseStillActive)
+    );
     assert_eq!(ledger.enter_lease_user(9, 5), Err(Error::LeaseStillActive));
     assert_eq!(ledger.finish(9, 5), Err(Error::LeaseStillActive));
     ledger.exit_lease_user(9, 5).unwrap();
