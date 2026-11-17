@@ -105,3 +105,56 @@ Rust's actual Polonius Alpha uses a more sophisticated combined CFG/outlives
 formulation. The new pass is intentionally narrower, and does not claim to
 implement Rust's actual algorithm, stabilize AttoLang's syntax, or certify
 compiled guests.
+
+
+## Strict typed-MIR census and SSA edge-phi model (third experimental slice)
+
+The new mir_lifetime_census_v1::verify_closed_census API requires **two**
+explicitly separate manifests:
+
+1. expected_events, which a compiler MUST enumerate from independently
+   validated source/typed MIR, not from its lowering event stream;
+2. observed_events, enumerated by its actual typed-MIR lowering.
+
+Both require unique nonzero event IDs and source-node IDs. Exact, complete
+event equality includes every instruction point, CFG edge, loan issue,
+invalidation, kill, origin subset and use (including returned borrows).
+Unknown or unsupported effect categories are rejected; duplicate point
+declarations, dangling CFG edges, malformed origin IDs and census drift
+fail closed. The bridge reconstructs the loan facts from the verified
+submitted records; consumers cannot silently pass a hand-built graph
+with omitted observed effects to this entrypoint.
+
+### SSA phi and overwrite discipline
+
+The experimental PhiEdge event is permitted only at a **dedicated split
+point** with one incoming CFG predecessor, one outgoing successor, and no
+other loan/mutation/use effects. Each incoming predecessor must have its
+own split point. This preserves path-specific transfers into a fresh
+SSA phi origin without introducing an unrestricted join-wide subset.
+Actual compiler-side SSA definition uniqueness, dominance, dynamic
+index/alias disjointness and overwrite kills are **not yet verified**:
+SSA origin identities must be minted by the compiler and reused-origin
+overwrites must remain unsupported in production integration. Do not
+claim full Polonius Alpha or true SSA dominance validation on this evidence.
+
+### Important safety and CI boundaries
+
+Exact agreement of TWO untrusted submitted inventories does not
+authenticate a program or its compilation. It is impossible for this
+library to prove the expected_events census is complete without an
+independent authoritative source/type/MIR reader and reverse check of
+emitted code operations. A caller could omit the same ownership effect
+from both manifests. Compiler integrations MUST provide independent
+provenance, authenticate source bytes, compiler identity and full effects,
+and fail closed on FFI, unwind/cancellation, actor hops, pinned suspension
+and unsupported operations. An unverified successful census is HOST_ONLY
+and must NEVER override the existing production borrow/codegen gate.
+
+The new regression suite tests the conditional Some-return/None-insert
+borrow, mismatched/missing/injected source and lowered MIR events,
+unsupported effects, duplicate event or point identities, malformed
+CFG edges, edge-local SSA phi merges, negative live-loan invalidation,
+budget rejection and input-order determinism. The six independently
+authored adversarial tests from PR #36 were also reconciled into this
+branch without importing its outdated solver changes.
