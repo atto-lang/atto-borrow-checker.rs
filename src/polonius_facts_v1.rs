@@ -224,6 +224,22 @@ pub fn analyze(facts: &Facts) -> Result<Report, Error> {
         for &pair in &p.issue {
             local.insert(pair);
         }
+        // Newly issued loans must also traverse subset edges at this
+        // instruction. Otherwise an issue in A followed by A -> B here,
+        // with only B live at the successor, could be unsafely dropped.
+        let mut issued_closure: VecDeque<Pair> = p.issue.iter().copied().collect();
+        while let Some((origin, loan)) = issued_closure.pop_front() {
+            charge(&mut steps, 1, point)?;
+            for &(from, to) in &p.subset {
+                charge(&mut steps, 1, point)?;
+                if origin == from && local.insert((to, loan)) {
+                    if local.len() > MAX_FACTS_PER_POINT {
+                        return Err(error(Code::Budget, point));
+                    }
+                    issued_closure.push_back((to, loan));
+                }
+            }
+        }
         if local.len() > MAX_FACTS_PER_POINT {
             return Err(error(Code::Budget, point));
         }
