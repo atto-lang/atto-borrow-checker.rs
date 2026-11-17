@@ -393,10 +393,7 @@ impl DomainAuthority {
 
     /// Restricted to the trusted actor scheduler. The actor/session identity
     /// comes from scheduler state, never from an incoming guest payload.
-    pub(crate) fn receiver_session(
-        &self,
-        actor: ActorIdentity,
-    ) -> Result<ReceiverSession, Error> {
+    pub(crate) fn receiver_session(&self, actor: ActorIdentity) -> Result<ReceiverSession, Error> {
         let state = self.shared.lock().map_err(|_| Error::Poisoned)?;
         if actor.id == 0 || actor.generation == 0 || actor != state.destination {
             return Err(Error::WrongReceiver);
@@ -456,10 +453,12 @@ impl State {
             if entry.epoch != stamp.generation {
                 return Err(Error::StaleAllocation);
             }
-            if entry.owner != Some(Owner {
-                actor: source,
-                slot: grant.source_owner_slot,
-            }) {
+            if entry.owner
+                != Some(Owner {
+                    actor: source,
+                    slot: grant.source_owner_slot,
+                })
+            {
                 return Err(Error::OwnerMismatch);
             }
         }
@@ -603,7 +602,6 @@ impl ReceivedTransfer {
         Ok(())
     }
 }
-
 
 #[cfg(test)]
 #[path = "mailman_runtime_authority_v1_tests.rs"]
