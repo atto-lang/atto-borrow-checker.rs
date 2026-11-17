@@ -354,8 +354,9 @@ pub fn verify_delivery(
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Ticket {
     selected: SelectedDelivery,
-    reachable: Vec<AllocationId>,
+    keys: Vec<AllocationKey>,
     active_users: u32,
+    receiver_active: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -398,8 +399,9 @@ pub struct DeliveryLedger {
     delivered: BTreeMap<(u64, u64), Ticket>,
     seen: BTreeSet<(u64, u64)>,
     latest_ticket_generation: BTreeMap<u64, u64>,
-    guards: BTreeMap<AllocationId, RegionGuard>,
-    consumed: BTreeSet<AllocationId>,
+    guards: BTreeMap<AllocationKey, RegionGuard>,
+    consumed: BTreeSet<AllocationKey>,
+    frozen_shared: BTreeSet<AllocationKey>,
 }
 
 impl DeliveryLedger {
@@ -414,6 +416,7 @@ impl DeliveryLedger {
             latest_ticket_generation: BTreeMap::new(),
             guards: BTreeMap::new(),
             consumed: BTreeSet::new(),
+            frozen_shared: BTreeSet::new(),
         }
     }
 
@@ -433,8 +436,11 @@ impl DeliveryLedger {
         if self.reserved.saturating_add(self.committed) >= self.capacity {
             return Err(Error::MailboxFull);
         }
-        for node in &proof.reachable {
+        for node in &proof.keys {
             if self.consumed.contains(node) {
+                return Err(Error::OwnershipNotExclusive);
+            }
+            if self.frozen_shared.contains(node) && is_writer(proof.selected) {
                 return Err(Error::OwnershipNotExclusive);
             }
             let guard = self.guards.get(node).copied().unwrap_or_default();
@@ -446,7 +452,7 @@ impl DeliveryLedger {
                 return Err(Error::LeaseConflict);
             }
         }
-        self.acquire_guards(proof.selected, &proof.reachable);
+        self.acquire_guards(proof.selected, &proof.keys);
         self.seen.insert(id);
         self.latest_ticket_generation
             .insert(proof.ticket, proof.ticket_generation);
@@ -454,15 +460,16 @@ impl DeliveryLedger {
             id,
             Ticket {
                 selected: proof.selected,
-                reachable: proof.reachable.clone(),
+                keys: proof.keys.clone(),
                 active_users: 0,
+                receiver_active: false,
             },
         );
         self.reserved += 1;
         Ok(())
     }
 
-    fn acquire_guards(&mut self, mode: SelectedDelivery, nodes: &[AllocationId]) {
+    fn acquire_guards(&mut self, mode: SelectedDelivery, nodes: &[AllocationKey]) {
         for id in nodes {
             let guard = self.guards.entry(*id).or_default();
             if is_reader(mode) {
@@ -473,7 +480,7 @@ impl DeliveryLedger {
         }
     }
 
-    fn release_guards(&mut self, mode: SelectedDelivery, nodes: &[AllocationId]) {
+    fn release_guards(&mut self, mode: SelectedDelivery, nodes: &[AllocationKey]) {
         for id in nodes {
             if let Some(guard) = self.guards.get_mut(id) {
                 if is_reader(mode) {
@@ -490,18 +497,27 @@ impl DeliveryLedger {
 
     pub fn commit(&mut self, ticket: u64, generation: u64) -> Result<bool, Error> {
         let id = (ticket, generation);
-        let value = self.pending.remove(&id).ok_or(Error::UnknownTicket)?;
+        let mut value = self.pending.remove(&id).ok_or(Error::UnknownTicket)?;
         self.reserved -= 1;
         self.committed += 1;
         if !retains_guard_after_commit(value.selected) {
-            self.release_guards(value.selected, &value.reachable);
+            self.release_guards(value.selected, &value.keys);
+        }
+        if matches!(
+            value.selected,
+            SelectedDelivery::ReadLease | SelectedDelivery::WriteLease
+        ) {
+            value.receiver_active = true;
+        }
+        if value.selected == SelectedDelivery::FrozenShare {
+            self.frozen_shared.extend(value.keys.iter().copied());
         }
         let consumed = matches!(
             value.selected,
             SelectedDelivery::Transfer | SelectedDelivery::ElidedDeepCopy
         );
         if consumed {
-            self.consumed.extend(value.reachable.iter().copied());
+            self.consumed.extend(value.keys.iter().copied());
         }
         self.delivered.insert(id, value);
         Ok(consumed)
@@ -512,7 +528,7 @@ impl DeliveryLedger {
             .pending
             .remove(&(ticket, generation))
             .ok_or(Error::UnknownTicket)?;
-        self.release_guards(value.selected, &value.reachable);
+        self.release_guards(value.selected, &value.keys);
         self.reserved -= 1;
         Ok(())
     }
@@ -527,6 +543,9 @@ impl DeliveryLedger {
             SelectedDelivery::ReadLease | SelectedDelivery::WriteLease
         ) {
             return Err(Error::LeaseScopeRequired);
+        }
+        if !value.receiver_active {
+            return Err(Error::LeaseStillActive);
         }
         value.active_users = value
             .active_users
@@ -547,15 +566,33 @@ impl DeliveryLedger {
         Ok(())
     }
 
+    /// The receiving actor must release its original loan explicitly;
+    /// removing the mailbox entry is NOT permission to reclaim live borrows.
+    pub fn release_receiver_lease(&mut self, ticket: u64, generation: u64) -> Result<(), Error> {
+        let value = self
+            .delivered
+            .get_mut(&(ticket, generation))
+            .ok_or(Error::UnknownTicket)?;
+        if !matches!(
+            value.selected,
+            SelectedDelivery::ReadLease | SelectedDelivery::WriteLease
+        ) || !value.receiver_active
+        {
+            return Err(Error::LeaseStillActive);
+        }
+        value.receiver_active = false;
+        Ok(())
+    }
+
     pub fn finish(&mut self, ticket: u64, generation: u64) -> Result<(), Error> {
         let id = (ticket, generation);
         let value = self.delivered.get(&id).ok_or(Error::UnknownTicket)?;
-        if value.active_users != 0 {
+        if value.active_users != 0 || value.receiver_active {
             return Err(Error::LeaseStillActive);
         }
         let value = self.delivered.remove(&id).ok_or(Error::UnknownTicket)?;
         if retains_guard_after_commit(value.selected) {
-            self.release_guards(value.selected, &value.reachable);
+            self.release_guards(value.selected, &value.keys);
         }
         self.committed -= 1;
         Ok(())
