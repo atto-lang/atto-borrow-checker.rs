@@ -838,3 +838,9 @@ pub mod ownership_bang_v1;
 
 /// Explicit field-projection/loop model; not an implicit V0 or MIR upgrade.
 pub mod cyclic_v1;
+
+/// Strict source/type witness attestation layered over canonical MIR V0.
+pub mod master_evidence_v1;
+
+/// Conservative dual-check for the V0/cyclic semantically identical subset.
+pub mod master_dual_v1;
