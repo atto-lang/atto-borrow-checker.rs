@@ -3,10 +3,10 @@
 //! Only a *diagnostic model*: caller-supplied uses, CFG, alias/provenance facts,
 //! and omissions are NOT authenticated. This must never authorize codegen or
 //! relax the production V0/cyclic ownership verifiers.
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use crate::polonius_facts_v1::{
     analyze, Code, Error, Facts, LoanId, OriginId, OriginUse, PointId, Report,
 };
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 const MAX_POINTS: usize = 4096;
 const MAX_EDGES: usize = 16_384;
@@ -49,10 +49,16 @@ pub struct SsaReport {
     pub inference_steps: usize,
 }
 fn err(code: Code, point: PointId) -> Error {
-    Error { code, point, loan: None }
+    Error {
+        code,
+        point,
+        loan: None,
+    }
 }
 fn charge(steps: &mut usize, point: PointId) -> Result<(), Error> {
-    *steps = steps.checked_add(1).ok_or_else(|| err(Code::WorkBudget, point))?;
+    *steps = steps
+        .checked_add(1)
+        .ok_or_else(|| err(Code::WorkBudget, point))?;
     if *steps > MAX_WORK {
         return Err(err(Code::WorkBudget, point));
     }
@@ -97,8 +103,12 @@ pub fn analyze_ssa(input: &Input) -> Result<SsaReport, Error> {
     if facts.entry == 0 || facts.points.is_empty() || facts.points.len() > MAX_POINTS {
         return Err(err(Code::InvalidGraph, facts.entry));
     }
-    if input.uses.len().saturating_add(input.definitions.len())
-        .saturating_add(input.phi_inputs.len()) > MAX_FACTS
+    if input
+        .uses
+        .len()
+        .saturating_add(input.definitions.len())
+        .saturating_add(input.phi_inputs.len())
+        > MAX_FACTS
     {
         return Err(err(Code::Budget, facts.entry));
     }
@@ -107,7 +117,10 @@ pub fn analyze_ssa(input: &Input) -> Result<SsaReport, Error> {
     let mut predecessors: BTreeMap<PointId, Vec<PointId>> = BTreeMap::new();
     let mut edge_count = 0usize;
     for point in &facts.points {
-        if point.id == 0 || !point.live_origins.is_empty() || points.insert(point.id, point).is_some() {
+        if point.id == 0
+            || !point.live_origins.is_empty()
+            || points.insert(point.id, point).is_some()
+        {
             return Err(err(Code::InvalidFact, point.id));
         }
         edge_count = edge_count.saturating_add(point.successors.len());
@@ -126,7 +139,10 @@ pub fn analyze_ssa(input: &Input) -> Result<SsaReport, Error> {
             if !predecessors.contains_key(&next) || !unique.insert(next) {
                 return Err(err(Code::InvalidGraph, point.id));
             }
-            predecessors.get_mut(&next).expect("validated").push(point.id);
+            predecessors
+                .get_mut(&next)
+                .expect("validated")
+                .push(point.id);
         }
     }
     let mut reachable = BTreeSet::new();
@@ -147,7 +163,10 @@ pub fn analyze_ssa(input: &Input) -> Result<SsaReport, Error> {
     let mut definitions = BTreeMap::<OriginId, PointId>::new();
     let mut defined_at = BTreeMap::<PointId, BTreeSet<OriginId>>::new();
     for &d in &input.definitions {
-        if d.origin == 0 || !points.contains_key(&d.point) || definitions.insert(d.origin, d.point).is_some() {
+        if d.origin == 0
+            || !points.contains_key(&d.point)
+            || definitions.insert(d.origin, d.point).is_some()
+        {
             return Err(err(Code::DuplicateFact, d.point));
         }
         defined_at.entry(d.point).or_default().insert(d.origin);
@@ -160,9 +179,10 @@ pub fn analyze_ssa(input: &Input) -> Result<SsaReport, Error> {
         let Some(&defpoint) = definitions.get(&u.origin) else {
             return Err(err(Code::InvalidFact, u.point));
         };
-        if !points.contains_key(&u.point) || u.point == defpoint ||
-            !local_uses.entry(u.point).or_default().insert(u.origin) ||
-            !dominated(facts.entry, defpoint, u.point, &graph, &mut steps)?
+        if !points.contains_key(&u.point)
+            || u.point == defpoint
+            || !local_uses.entry(u.point).or_default().insert(u.origin)
+            || !dominated(facts.entry, defpoint, u.point, &graph, &mut steps)?
         {
             return Err(err(Code::InvalidFact, u.point));
         }
@@ -204,11 +224,19 @@ pub fn analyze_ssa(input: &Input) -> Result<SsaReport, Error> {
             return Err(err(Code::InvalidFact, phi.predecessor));
         };
         if !dominated(facts.entry, source_def, phi.predecessor, &graph, &mut steps)?
-            || phi_by_edge.insert((phi.predecessor, phi.successor, phi.destination), phi.source).is_some()
+            || phi_by_edge
+                .insert(
+                    (phi.predecessor, phi.successor, phi.destination),
+                    phi.source,
+                )
+                .is_some()
         {
             return Err(err(Code::InvalidFact, phi.predecessor));
         }
-        phi_destinations.entry(phi.successor).or_default().insert(phi.destination);
+        phi_destinations
+            .entry(phi.successor)
+            .or_default()
+            .insert(phi.destination);
     }
     for (&successor, destinations) in &phi_destinations {
         for &predecessor in &predecessors[&successor] {
@@ -264,9 +292,10 @@ pub fn analyze_ssa(input: &Input) -> Result<SsaReport, Error> {
                 return Err(err(Code::Budget, id));
             }
         }
-        let new_before: BTreeSet<_> = necessary.difference(
-            &defined_at.get(&id).cloned().unwrap_or_default()
-        ).copied().collect();
+        let new_before: BTreeSet<_> = necessary
+            .difference(&defined_at.get(&id).cloned().unwrap_or_default())
+            .copied()
+            .collect();
         if necessary.len() > MAX_ORIGINS || new_before.len() > MAX_ORIGINS {
             return Err(err(Code::Budget, id));
         }
@@ -305,7 +334,12 @@ pub fn analyze_ssa(input: &Input) -> Result<SsaReport, Error> {
         point.live_origins = live.into_iter().collect();
     }
     let loan_report = analyze(&enriched)?;
-    Ok(SsaReport { live_before_definition: before, live_at_instruction: at, loan_report, inference_steps: steps })
+    Ok(SsaReport {
+        live_before_definition: before,
+        live_at_instruction: at,
+        loan_report,
+        inference_steps: steps,
+    })
 }
 
 /// Returns just the set of distinct live loan IDs at each point for easy
