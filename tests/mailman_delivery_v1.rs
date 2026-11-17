@@ -494,3 +494,160 @@ fn ticket_epochs_must_increase_after_prior_aborted_ticket() {
         .unwrap();
     ledger.abort(9, 6).unwrap();
 }
+
+#[test]
+fn malformed_allocation_epoch_is_rejected_before_minting_a_proof() {
+    let mut graph = cyclic();
+    graph.nodes[1].allocation_generation = 0;
+    assert_eq!(
+        err(&graph, &request(DeliveryMode::Transfer)),
+        Error::InvalidInventory
+    );
+    graph.nodes[1].allocation_generation = 1;
+    graph.nodes[1].owner_domain = 0;
+    assert_eq!(
+        err(&graph, &request(DeliveryMode::Transfer)),
+        Error::InvalidInventory
+    );
+}
+
+#[test]
+fn verified_proof_must_match_destination_actor_incarnation() {
+    let graph = cyclic();
+    let mut req = request(DeliveryMode::Transfer);
+    req.destination_actor_generation = 13;
+    let proof = verify_delivery(&graph, &req).unwrap();
+    let mut ledger = DeliveryLedger::new(2, 12);
+    assert_eq!(ledger.prepare(&proof), Err(Error::StaleGeneration));
+    assert_eq!(ledger.counts(), (0, 0));
+    let mut closed = DeliveryLedger::new(2, 0);
+    assert_eq!(
+        closed.prepare(&verify_delivery(&graph, &request(DeliveryMode::Transfer)).unwrap()),
+        Err(Error::StaleGeneration)
+    );
+}
+
+#[test]
+fn reused_allocation_slot_requires_a_fresh_generation() {
+    let graph = cyclic();
+    let proof = verify_delivery(&graph, &request(DeliveryMode::Transfer)).unwrap();
+    let mut ledger = DeliveryLedger::new(3, 12);
+    ledger.prepare(&proof).unwrap();
+    ledger.commit(9, 5).unwrap();
+    ledger.finish(9, 5).unwrap();
+
+    let mut stale = request(DeliveryMode::Transfer);
+    stale.ticket = 10;
+    assert_eq!(
+        ledger.prepare(&verify_delivery(&graph, &stale).unwrap()),
+        Err(Error::OwnershipNotExclusive)
+    );
+    let mut newly_allocated = cyclic();
+    for node in &mut newly_allocated.nodes {
+        node.allocation_generation = 2;
+    }
+    ledger
+        .prepare(&verify_delivery(&newly_allocated, &stale).unwrap())
+        .unwrap();
+    ledger.abort(10, 5).unwrap();
+}
+
+#[test]
+fn independent_memory_domains_do_not_alias_on_identical_local_offsets() {
+    let first = cyclic();
+    let mut ledger = DeliveryLedger::new(3, 12);
+    ledger
+        .prepare(&verify_delivery(&first, &request(DeliveryMode::Transfer)).unwrap())
+        .unwrap();
+    ledger.commit(9, 5).unwrap();
+    ledger.finish(9, 5).unwrap();
+
+    let mut second = cyclic();
+    for node in &mut second.nodes {
+        node.owner_domain = 8;
+    }
+    let mut next = request(DeliveryMode::Transfer);
+    next.source_domain = 8;
+    next.destination_domain = 8;
+    next.ticket = 10;
+    ledger
+        .prepare(&verify_delivery(&second, &next).unwrap())
+        .unwrap();
+    ledger.abort(10, 5).unwrap();
+}
+
+#[test]
+fn frozen_share_escrow_blocks_writer_then_fences_mutation_after_commit() {
+    let mut frozen = cyclic();
+    for node in &mut frozen.nodes {
+        node.frozen = true;
+        node.mutable = false;
+        node.sync = true;
+    }
+    let share = verify_delivery(&frozen, &request(DeliveryMode::FrozenShare)).unwrap();
+    let mut writer = request(DeliveryMode::WriteLease);
+    writer.ticket = 10;
+    let writer = verify_delivery(&cyclic(), &writer).unwrap();
+
+    let mut ledger = DeliveryLedger::new(3, 12);
+    ledger.prepare(&share).unwrap();
+    assert_eq!(ledger.prepare(&writer), Err(Error::LeaseConflict));
+    ledger.commit(9, 5).unwrap();
+    assert_eq!(ledger.prepare(&writer), Err(Error::OwnershipNotExclusive));
+    ledger.finish(9, 5).unwrap();
+    assert_eq!(ledger.prepare(&writer), Err(Error::OwnershipNotExclusive));
+}
+
+#[test]
+fn frozen_share_fanout_is_read_only_and_can_admit_multiple_readers() {
+    let mut frozen = cyclic();
+    for node in &mut frozen.nodes {
+        node.frozen = true;
+        node.mutable = false;
+        node.sync = true;
+    }
+    let first = verify_delivery(&frozen, &request(DeliveryMode::FrozenShare)).unwrap();
+    let mut req = request(DeliveryMode::FrozenShare);
+    req.ticket = 10;
+    let second = verify_delivery(&frozen, &req).unwrap();
+    let mut ledger = DeliveryLedger::new(2, 12);
+    ledger.prepare(&first).unwrap();
+    ledger.prepare(&second).unwrap();
+    ledger.commit(9, 5).unwrap();
+    ledger.commit(10, 5).unwrap();
+    ledger.finish(9, 5).unwrap();
+    ledger.finish(10, 5).unwrap();
+}
+
+#[test]
+fn original_remote_receiver_lease_must_finish_before_reclamation() {
+    let graph = cyclic();
+    let proof = verify_delivery(&graph, &request(DeliveryMode::ReadLease)).unwrap();
+    let mut ledger = DeliveryLedger::new(2, 12);
+    ledger.prepare(&proof).unwrap();
+    ledger.commit(9, 5).unwrap();
+    assert_eq!(ledger.finish(9, 5), Err(Error::LeaseStillActive));
+    ledger.enter_lease_user(9, 5).unwrap();
+    ledger.release_receiver_lease(9, 5).unwrap();
+    assert_eq!(ledger.release_receiver_lease(9, 5), Err(Error::LeaseStillActive));
+    assert_eq!(ledger.enter_lease_user(9, 5), Err(Error::LeaseStillActive));
+    assert_eq!(ledger.finish(9, 5), Err(Error::LeaseStillActive));
+    ledger.exit_lease_user(9, 5).unwrap();
+    ledger.finish(9, 5).unwrap();
+}
+
+#[test]
+fn pending_deep_copy_holds_read_guard_until_copy_publication() {
+    let graph = cyclic();
+    let clone = verify_delivery(&graph, &request(DeliveryMode::DeepCopy)).unwrap();
+    let mut writer_request = request(DeliveryMode::WriteLease);
+    writer_request.ticket = 10;
+    let writer = verify_delivery(&graph, &writer_request).unwrap();
+    let mut ledger = DeliveryLedger::new(2, 12);
+    ledger.prepare(&clone).unwrap();
+    assert_eq!(ledger.prepare(&writer), Err(Error::LeaseConflict));
+    ledger.commit(9, 5).unwrap();
+    ledger.prepare(&writer).unwrap();
+    ledger.abort(10, 5).unwrap();
+    ledger.finish(9, 5).unwrap();
+}
