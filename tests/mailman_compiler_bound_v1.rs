@@ -228,7 +228,12 @@ fn rejects_wrong_version_producer_and_unauthenticated_mir_claims() {
     let mut invalid = program.clone();
     invalid.expected_instruction_ids.pop();
     assert!(matches!(
-        verify_compiler_transfer(&invalid, &make_census(&invalid, 9), &graph(0, 1), &request(9)),
+        verify_compiler_transfer(
+            &invalid,
+            &make_census(&invalid, 9),
+            &graph(0, 1),
+            &request(9)
+        ),
         Err(Error::MirInvalid(_))
     ));
     let mut wrong_effect = program.clone();
@@ -253,10 +258,13 @@ fn missing_rollback_path_or_unmodeled_actor_operation_fails_closed() {
         .instructions
         .push(instruction(5, Effect::Control, Op::Return));
     program.expected_instruction_ids = (1..=5).collect();
-    assert!(
-        verify_compiler_transfer(&program, &make_census(&program, 9), &graph(0, 1), &request(9))
-            .is_err()
-    );
+    assert!(verify_compiler_transfer(
+        &program,
+        &make_census(&program, 9),
+        &graph(0, 1),
+        &request(9)
+    )
+    .is_err());
 
     let mut unsupported = function(9);
     unsupported.blocks[0].instructions.push(instruction(
