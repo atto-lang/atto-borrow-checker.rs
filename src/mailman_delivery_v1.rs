@@ -313,7 +313,7 @@ pub fn verify_delivery(
     })
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct Ticket {
     selected: SelectedDelivery,
     reachable: Vec<AllocationId>,
