@@ -128,6 +128,8 @@ impl CompilerBoundTransfer {
 
     /// Trusted runtime adapter only: this bound record is *model evidence*,
     /// not an allocator-minted memory capability.
+    // Reserved for the trusted runtime integration; no production caller yet.
+    #[allow(dead_code)]
     pub(crate) fn delivery(&self) -> &VerifiedDelivery {
         &self.delivery
     }
