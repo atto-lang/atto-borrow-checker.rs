@@ -175,6 +175,8 @@ impl VerifiedDelivery {
 
     /// Compiler/runtime bridge only. Allocation identities are not
     /// public, user-mintable grant tokens.
+    // Restricted runtime bridge, not yet consumed by the shipped compilers.
+    #[allow(dead_code)]
     pub(crate) fn allocation_keys(&self) -> &[AllocationKey] {
         &self.keys
     }
