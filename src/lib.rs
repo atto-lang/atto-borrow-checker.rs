@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub mod actor_arena_ref32_v1;
 pub mod actor_state_guard_v1;
 pub mod actor_state_runtime_v1;
+pub mod mailman_compiler_bound_v1;
 pub mod mailman_delivery_v1;
 
 pub type OwnerId = u32;
