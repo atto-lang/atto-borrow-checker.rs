@@ -253,12 +253,14 @@ pub fn verify_delivery(
             if inventory.nodes.iter().any(|node| node.active_writer) {
                 return Err(Error::LeaseConflict);
             }
+            // Untracked mutable aliases cannot be made safe by claiming an
+            // unrelated scoped lease. The source snapshot must be guarded by
+            // real, transitive, compiler-proved read authority.
             if inventory.nodes.iter().any(|node| {
                 node.mutable
                     && (node.owner_domain != request.source_domain || node.escaped_aliases != 0)
-            }) && !request.scoped_lease_proven
-            {
-                return Err(Error::LeaseScopeRequired);
+            }) {
+                return Err(Error::OwnershipNotExclusive);
             }
             if inventory
                 .nodes
@@ -393,6 +395,7 @@ fn retains_guard_after_commit(mode: SelectedDelivery) -> bool {
 #[derive(Debug)]
 pub struct DeliveryLedger {
     capacity: usize,
+    destination_actor_generation: u64,
     reserved: usize,
     committed: usize,
     pending: BTreeMap<(u64, u64), Ticket>,
@@ -405,9 +408,12 @@ pub struct DeliveryLedger {
 }
 
 impl DeliveryLedger {
-    pub fn new(capacity: usize) -> Self {
+    /// Bind the ledger to one live destination incarnation.
+    /// Runtime implementations also need actor ID and authenticated origin.
+    pub fn new(capacity: usize, destination_actor_generation: u64) -> Self {
         Self {
             capacity,
+            destination_actor_generation,
             reserved: 0,
             committed: 0,
             pending: BTreeMap::new(),
@@ -421,6 +427,11 @@ impl DeliveryLedger {
     }
 
     pub fn prepare(&mut self, proof: &VerifiedDelivery) -> Result<(), Error> {
+        if self.destination_actor_generation == 0
+            || proof.destination_actor_generation != self.destination_actor_generation
+        {
+            return Err(Error::StaleGeneration);
+        }
         let id = (proof.ticket, proof.ticket_generation);
         if self.seen.contains(&id)
             || self
