@@ -125,6 +125,12 @@ impl CompilerBoundTransfer {
     pub fn source_sha256(&self) -> &str {
         &self.source_sha256
     }
+
+    /// Trusted runtime adapter only: this bound record is *model evidence*,
+    /// not an allocator-minted memory capability.
+    pub(crate) fn delivery(&self) -> &VerifiedDelivery {
+        &self.delivery
+    }
 }
 
 pub fn verify_compiler_transfer(
