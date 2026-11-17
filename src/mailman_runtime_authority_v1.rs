@@ -11,7 +11,7 @@
 //! This does NOT move physical heaps, authenticate compiler codegen, mint
 //! unforgeable cross-process tokens, or safely expose arbitrary shared memory.
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::mailman_compiler_bound_v1::{
     CompilerBoundTransfer, Error as BrokerError, SharedTransferBroker,
@@ -21,6 +21,7 @@ use crate::OwnerId;
 
 const MAX_ALLOCATIONS: usize = 65_536;
 const MAX_GRANTS: usize = 4096;
+const MAX_DOMAINS: usize = 256;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ActorIdentity {
@@ -130,7 +131,9 @@ struct State {
 }
 
 type Shared = Arc<Mutex<State>>;
-type Directory = BTreeMap<u64, Weak<Mutex<State>>>;
+// Retain each authority for the process lifetime. A weak directory would
+// silently forget quarantined handoffs when the last application handle drops.
+type Directory = BTreeMap<u64, Shared>;
 
 fn directory() -> &'static Mutex<Directory> {
     static DIRECTORY: OnceLock<Mutex<Directory>> = OnceLock::new();
@@ -158,9 +161,9 @@ impl DomainAuthority {
         let mut quotas = mailmen.to_vec();
         quotas.sort_unstable();
         let mut map = directory().lock().map_err(|_| Error::Poisoned)?;
-        // Bounded directory without permitting live domains to be evicted.
-        map.retain(|_, weak| weak.strong_count() != 0);
-        if let Some(existing) = map.get(&domain).and_then(Weak::upgrade) {
+        // Never discard a domain's consumed/escrow history before process
+        // shutdown, even when all ordinary application handles have dropped.
+        if let Some(existing) = map.get(&domain).cloned() {
             let state = existing.lock().map_err(|_| Error::Poisoned)?;
             if state.destination != destination
                 || state.capacity != capacity
@@ -171,7 +174,7 @@ impl DomainAuthority {
             drop(state);
             return Ok(Self { shared: existing });
         }
-        if map.len() >= MAX_ALLOCATIONS {
+        if map.len() >= MAX_DOMAINS {
             return Err(Error::AllocationBudget);
         }
         let broker = SharedTransferBroker::new(
@@ -191,7 +194,7 @@ impl DomainAuthority {
             grants: BTreeMap::new(),
             next_grant: 1,
         }));
-        map.insert(domain, Arc::downgrade(&shared));
+        map.insert(domain, Arc::clone(&shared));
         Ok(Self { shared })
     }
 
