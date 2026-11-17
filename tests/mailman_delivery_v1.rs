@@ -61,41 +61,65 @@ fn unique_cyclic_graph_with_repeated_internal_aliases_can_transfer() {
 fn reject_missing_nested_nodes_dangling_edges_and_false_census() {
     let mut graph = cyclic();
     graph.nodes[1].references.push(99);
-    assert_eq!(err(&graph, &request(DeliveryMode::Transfer)), Error::InvalidInventory);
+    assert_eq!(
+        err(&graph, &request(DeliveryMode::Transfer)),
+        Error::InvalidInventory
+    );
 
     let mut graph = cyclic();
     graph.nodes.pop();
     graph.expected_reachable.pop();
-    assert_eq!(err(&graph, &request(DeliveryMode::Transfer)), Error::InvalidInventory);
+    assert_eq!(
+        err(&graph, &request(DeliveryMode::Transfer)),
+        Error::InvalidInventory
+    );
 
     let mut graph = cyclic();
     graph.expected_reachable = vec![1, 2, 2];
-    assert_eq!(err(&graph, &request(DeliveryMode::Transfer)), Error::InvalidInventory);
+    assert_eq!(
+        err(&graph, &request(DeliveryMode::Transfer)),
+        Error::InvalidInventory
+    );
 
     let mut graph = cyclic();
     graph.nodes.push(node(4, &[]));
     graph.expected_reachable.push(4);
-    assert_eq!(err(&graph, &request(DeliveryMode::Transfer)), Error::InvalidInventory);
+    assert_eq!(
+        err(&graph, &request(DeliveryMode::Transfer)),
+        Error::InvalidInventory
+    );
 }
 
 #[test]
 fn reject_zero_duplicate_and_budgeted_graph_identifiers() {
     let mut graph = cyclic();
     graph.root = 0;
-    assert_eq!(err(&graph, &request(DeliveryMode::DeepCopy)), Error::InventoryBudget);
+    assert_eq!(
+        err(&graph, &request(DeliveryMode::DeepCopy)),
+        Error::InventoryBudget
+    );
 
     let mut graph = cyclic();
     graph.nodes[1].id = 1;
-    assert_eq!(err(&graph, &request(DeliveryMode::DeepCopy)), Error::InvalidInventory);
+    assert_eq!(
+        err(&graph, &request(DeliveryMode::DeepCopy)),
+        Error::InvalidInventory
+    );
 
     let mut graph = cyclic();
     graph.nodes[0].references = vec![2; 16385];
-    assert_eq!(err(&graph, &request(DeliveryMode::DeepCopy)), Error::InventoryBudget);
+    assert_eq!(
+        err(&graph, &request(DeliveryMode::DeepCopy)),
+        Error::InventoryBudget
+    );
 
     let mut graph = cyclic();
     graph.nodes = (1..=4097).map(|id| node(id, &[])).collect();
     graph.expected_reachable = (1..=4097).collect();
-    assert_eq!(err(&graph, &request(DeliveryMode::DeepCopy)), Error::InventoryBudget);
+    assert_eq!(
+        err(&graph, &request(DeliveryMode::DeepCopy)),
+        Error::InventoryBudget
+    );
 }
 
 #[test]
@@ -340,7 +364,10 @@ fn rejects_loan_user_on_non_loan_delivery() {
     let mut ledger = DeliveryLedger::new(1);
     ledger.prepare(&proof).unwrap();
     ledger.commit(9, 5).unwrap();
-    assert_eq!(ledger.enter_lease_user(9, 5), Err(Error::LeaseScopeRequired));
+    assert_eq!(
+        ledger.enter_lease_user(9, 5),
+        Err(Error::LeaseScopeRequired)
+    );
     ledger.finish(9, 5).unwrap();
 }
 
@@ -416,10 +443,7 @@ fn committed_transfer_invalidates_stale_source_proofs() {
     ledger.prepare(&proof).unwrap();
     ledger.commit(9, 5).unwrap();
     ledger.finish(9, 5).unwrap();
-    assert_eq!(
-        ledger.prepare(&second),
-        Err(Error::OwnershipNotExclusive)
-    );
+    assert_eq!(ledger.prepare(&second), Err(Error::OwnershipNotExclusive));
 }
 
 #[test]
@@ -438,6 +462,8 @@ fn ticket_epochs_must_increase_after_prior_aborted_ticket() {
     );
 
     stale.ticket_generation = 6;
-    ledger.prepare(&verify_delivery(&graph, &stale).unwrap()).unwrap();
+    ledger
+        .prepare(&verify_delivery(&graph, &stale).unwrap())
+        .unwrap();
     ledger.abort(9, 6).unwrap();
 }
