@@ -8,6 +8,10 @@ Compiler-local type inference, ownership state changes and CFG construction can 
 
 See [hybrid integration design](docs/HYBRID_COMPILER_INTEGRATION.md).
 
+## Experimental Polonius-inspired oracle
+
+The standalone `polonius_facts_v1` module adds bounded, point-sensitive loan fact propagation and branch-local liveness, inspired by Rust's Polonius Alpha. It does **not** implement full Polonius Alpha, authenticate typed-MIR facts, or permit production V0/cyclic validation to be skipped. See [design and safety limits](docs/POLONIUS_LOAN_FACTS_V1.md).
+
 ## Current implementation
 
 `actor_arena_ref32_v1` models nonzero 32-bit arena-relative offsets, per-actor/arena/generation identity, allocation extents and alignment, overflow-denial, and stale-retirement rejection. Its independent Rust tests are **model-only**: there is no actual native heap, pointer, physical shared-memory guard, compiler lowering, or quiescence proof in this module. Backend integrations must retain arena/domain/generation metadata outside the 32-bit guest offset, verify each access, and separately enforce loan and physical-retirement rules.
