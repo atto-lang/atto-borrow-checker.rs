@@ -2,7 +2,7 @@ use atto_borrow_checker::mir_v1::{
     Effect, Instruction, MirBlock, MirError, MirFunction, Producer, CONTRACT_VERSION,
 };
 use atto_borrow_checker::ownership_bang_v1::{
-    verify_bang_mir, BangError, BangSite, SourceAuthority, Spelling, Verb,
+    verify_bang_mir, BangError, BangManifest, BangSite, SourceAuthority, Spelling, Verb, CONTRACT_VERSION as BANG_VERSION,
 };
 use atto_borrow_checker::{BorrowKind, Op, Traits};
 
@@ -13,7 +13,7 @@ fn traits(copy: bool, send: bool) -> Traits {
 fn mir(ops: Vec<Op>) -> MirFunction {
     let instructions: Vec<_> = ops.into_iter().enumerate().map(|(index, operation)| {
         let id = index as u64 + 1;
-        let effect = match operation {
+        let effect = match &operation {
             Op::Return => Effect::Control,
             Op::Suspend => Effect::Suspension,
             Op::PublishFrozen { .. } => Effect::ActorBoundary,
@@ -60,11 +60,11 @@ fn site(id: u64, verb: Verb) -> BangSite {
 }
 
 fn check(program: &MirFunction, sites: &[BangSite]) -> Result<atto_borrow_checker::Proof, BangError> {
-    verify_bang_mir(
-        program,
-        sites,
-        &sites.iter().map(|s| s.instruction_id).collect::<Vec<_>>(),
-    )
+    verify_bang_mir(program, &BangManifest {
+        version: BANG_VERSION.to_string(),
+        sites: sites.to_vec(),
+        source_bang_instruction_ids: sites.iter().map(|s| s.instruction_id).collect(),
+    })
 }
 
 fn unsafe_code(program: &MirFunction, sites: &[BangSite]) -> &'static str {
@@ -342,21 +342,21 @@ fn source_census_is_independent_and_must_match_sites_and_mir() {
     let mut s = site(2, Verb::Copy);
     s.into = Some(2);
     assert_eq!(
-        verify_bang_mir(&p, &[s.clone()], &[2, 99]),
+        verify_bang_mir(&p, &BangManifest { version: BANG_VERSION.to_string(), sites: vec![s.clone()], source_bang_instruction_ids: vec![2, 99] }),
         Err(BangError::Invalid("E_BANG_INCOMPLETE_SOURCE_CENSUS"))
     );
     assert_eq!(
-        verify_bang_mir(&p, &[s.clone()], &[2, 2]),
+        verify_bang_mir(&p, &BangManifest { version: BANG_VERSION.to_string(), sites: vec![s.clone()], source_bang_instruction_ids: vec![2, 2] }),
         Err(BangError::Invalid("E_BANG_SOURCE_CENSUS"))
     );
     assert_eq!(
-        verify_bang_mir(&p, &[s.clone(), s.clone()], &[2]),
+        verify_bang_mir(&p, &BangManifest { version: BANG_VERSION.to_string(), sites: vec![s.clone(), s.clone()], source_bang_instruction_ids: vec![2] }),
         Err(BangError::Invalid("E_BANG_DUPLICATE_SITE"))
     );
     s.instruction_id = 99;
     s.source_node_id = 199;
     assert_eq!(
-        verify_bang_mir(&p, &[s], &[99]),
+        verify_bang_mir(&p, &BangManifest { version: BANG_VERSION.to_string(), sites: vec![s], source_bang_instruction_ids: vec![99] }),
         Err(BangError::Invalid("E_BANG_MISSING_MIR_SITE"))
     );
 }
@@ -388,4 +388,17 @@ fn invalid_operand_shape_rejected_before_semantic_verification() {
     assert_eq!(check(&p, &[s.clone()]), Err(BangError::Invalid("E_BANG_OPERANDS")));
     s.into = Some(1);
     assert_eq!(check(&p, &[s]), Err(BangError::Invalid("E_BANG_DESTINATION")));
+}
+
+#[test]
+fn rejects_bang_manifest_version_skew() {
+    let p = mir(vec![init(true, false), Op::Copy { from: 1, into: 2 }, Op::Return]);
+    let mut s = site(2, Verb::Copy);
+    s.into = Some(2);
+    let manifest = BangManifest {
+        version: "atto-ownership-bang-v0".to_string(),
+        sites: vec![s],
+        source_bang_instruction_ids: vec![2],
+    };
+    assert_eq!(verify_bang_mir(&p, &manifest), Err(BangError::Invalid("E_BANG_VERSION")));
 }
