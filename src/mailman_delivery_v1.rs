@@ -177,8 +177,11 @@ fn verify_inventory(inventory: &GraphInventory) -> Result<Vec<AllocationId>, Err
     let mut indexed = BTreeMap::new();
     let mut edges = 0usize;
     for node in &inventory.nodes {
-        if node.id == 0 || node.owner_domain == 0 || node.allocation_generation == 0
-            || indexed.insert(node.id, node).is_some() {
+        if node.id == 0
+            || node.owner_domain == 0
+            || node.allocation_generation == 0
+            || indexed.insert(node.id, node).is_some()
+        {
             return Err(Error::InvalidInventory);
         }
         edges = edges.saturating_add(node.references.len());
@@ -390,9 +393,7 @@ fn is_writer(mode: SelectedDelivery) -> bool {
 fn is_reader(mode: SelectedDelivery) -> bool {
     matches!(
         mode,
-        SelectedDelivery::DeepCopy
-            | SelectedDelivery::ReadLease
-            | SelectedDelivery::FrozenShare
+        SelectedDelivery::DeepCopy | SelectedDelivery::ReadLease | SelectedDelivery::FrozenShare
     )
 }
 
