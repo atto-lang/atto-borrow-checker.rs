@@ -14,7 +14,12 @@ fn p(id: u32, successors: &[u32], live_origins: &[u32]) -> Point {
     }
 }
 
-fn verify(points: Vec<Point>) -> Result<atto_borrow_checker::polonius_facts_v1::Report, atto_borrow_checker::polonius_facts_v1::Error> {
+fn verify(
+    points: Vec<Point>,
+) -> Result<
+    atto_borrow_checker::polonius_facts_v1::Report,
+    atto_borrow_checker::polonius_facts_v1::Error,
+> {
     analyze(&Facts { entry: 1, points })
 }
 
@@ -32,9 +37,13 @@ fn map_get_or_insert_borrow_only_on_some_path() {
     reborrow_none.issue.push((20, 8));
     let returned_none = p(5, &[], &[20]);
     let report = verify(vec![
-        lookup.clone(), returned_some.clone(), insert_none.clone(),
-        reborrow_none, returned_none,
-    ]).expect("the Some return must not poison None's later mutation");
+        lookup.clone(),
+        returned_some.clone(),
+        insert_none.clone(),
+        reborrow_none,
+        returned_none,
+    ])
+    .expect("the Some return must not poison None's later mutation");
     assert!(report.live_loans_on_entry[&2].contains(&7));
     assert!(!report.live_loans_on_entry[&3].contains(&7));
     assert!(report.live_loans_on_entry[&5].contains(&8));
@@ -42,10 +51,18 @@ fn map_get_or_insert_borrow_only_on_some_path() {
     // If the old loan remains live on the mutation path, the same write
     // must be rejected, not silently downgraded to a non-conflict.
     insert_none.live_origins = vec![10];
-    let err = verify(vec![lookup, returned_some, insert_none,
-        p(4, &[5], &[20]), p(5, &[], &[20])]).unwrap_err();
-    assert_eq!((err.code, err.point, err.loan),
-        (Code::InvalidatedLoan, 3, Some(7)));
+    let err = verify(vec![
+        lookup,
+        returned_some,
+        insert_none,
+        p(4, &[5], &[20]),
+        p(5, &[], &[20]),
+    ])
+    .unwrap_err();
+    assert_eq!(
+        (err.code, err.point, err.loan),
+        (Code::InvalidatedLoan, 3, Some(7))
+    );
 }
 
 #[test]
@@ -58,8 +75,10 @@ fn a_may_live_loan_from_either_branch_blocks_join_mutation() {
     let mut joined = p(4, &[], &[10, 20]);
     joined.invalidate.push(8);
     let err = verify(vec![entry, left, right, joined]).unwrap_err();
-    assert_eq!((err.code, err.point, err.loan),
-        (Code::InvalidatedLoan, 4, Some(8)));
+    assert_eq!(
+        (err.code, err.point, err.loan),
+        (Code::InvalidatedLoan, 4, Some(8))
+    );
 }
 
 #[test]
@@ -73,8 +92,10 @@ fn transitive_reborrow_survives_dead_intermediate_origins_across_points() {
     let mut final_access = p(4, &[], &[30]);
     final_access.invalidate.push(7);
     let err = verify(vec![issue, first, second, final_access]).unwrap_err();
-    assert_eq!((err.code, err.point, err.loan),
-        (Code::InvalidatedLoan, 4, Some(7)));
+    assert_eq!(
+        (err.code, err.point, err.loan),
+        (Code::InvalidatedLoan, 4, Some(7))
+    );
 }
 
 #[test]
@@ -99,8 +120,10 @@ fn loop_backedge_must_not_launder_live_loan() {
     let mut body = p(2, &[2, 3], &[10]);
     body.invalidate.push(7);
     let err = verify(vec![issue, body, p(3, &[], &[])]).unwrap_err();
-    assert_eq!((err.code, err.point, err.loan),
-        (Code::InvalidatedLoan, 2, Some(7)));
+    assert_eq!(
+        (err.code, err.point, err.loan),
+        (Code::InvalidatedLoan, 2, Some(7))
+    );
 }
 
 #[test]
