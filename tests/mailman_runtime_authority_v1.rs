@@ -310,13 +310,13 @@ fn global_registry_rejects_second_conflicting_actor_incarnation() {
 #[test]
 fn abandoned_committed_envelope_remains_quarantined_after_handles_drop() {
     let domain = 1009;
-    let authority = authority(domain);
-    authority.register_allocator_owned(SENDER, 1, &stamps(0, 1)).unwrap();
-    let mut pending = authority.prepare(1, SENDER, &proof(domain, 9, 0, 1)).unwrap();
+    let original_authority = authority(domain);
+    original_authority.register_allocator_owned(SENDER, 1, &stamps(0, 1)).unwrap();
+    let mut pending = original_authority.prepare(1, SENDER, &proof(domain, 9, 0, 1)).unwrap();
     let received = pending.commit().unwrap();
     drop(received);
     drop(pending);
-    drop(authority);
+    drop(original_authority);
     let resumed = authority(domain);
     assert_eq!(resumed.pending_count().unwrap(), 1);
     assert_eq!(resumed.owner_of(stamps(0, 1)[0]).unwrap(), None);
