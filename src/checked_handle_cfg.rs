@@ -14,10 +14,19 @@ pub const MAX_CFG_STATES: usize = 16384;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Action {
-    Ref { handle: u32 },
-    Deref { handle: u32, view: u32 },
-    EndView { view: u32 },
-    Unref { handle: u32 },
+    Ref {
+        handle: u32,
+    },
+    Deref {
+        handle: u32,
+        view: u32,
+    },
+    EndView {
+        view: u32,
+    },
+    Unref {
+        handle: u32,
+    },
     /// A normal or exceptional function/actor exit; every live loan must end.
     Exit,
     /// Pure transition with no lifetime effect; branching follows successors.
@@ -43,11 +52,16 @@ struct Facts {
 
 impl Facts {
     fn fresh() -> Self {
-        Self { handles: BTreeSet::new(), views: BTreeMap::new(),
-            consumed: BTreeSet::new() }
+        Self {
+            handles: BTreeSet::new(),
+            views: BTreeMap::new(),
+            consumed: BTreeSet::new(),
+        }
     }
 
-    fn has_live(&self) -> bool { !self.handles.is_empty() || !self.views.is_empty() }
+    fn has_live(&self) -> bool {
+        !self.handles.is_empty() || !self.views.is_empty()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -72,14 +86,20 @@ pub enum FlowError {
 /// ensuring that a release in only one arm cannot make another arm appear safe.
 /// The state budget prevents adversarial exponential path combinations.
 pub fn verify_all_paths(cfg: &[Block], entry: usize) -> Result<(), FlowError> {
-    if cfg.is_empty() || entry >= cfg.len() { return Err(FlowError::Empty); }
-    if cfg.len() > MAX_CFG_NODES { return Err(FlowError::Budget); }
+    if cfg.is_empty() || entry >= cfg.len() {
+        return Err(FlowError::Empty);
+    }
+    if cfg.len() > MAX_CFG_NODES {
+        return Err(FlowError::Budget);
+    }
     for block in cfg {
         if block.successors.iter().any(|&n| n >= cfg.len()) {
             return Err(FlowError::BadEdge);
         }
         if matches!(block.action, Action::Exit) {
-            if !block.successors.is_empty() { return Err(FlowError::BadEdge); }
+            if !block.successors.is_empty() {
+                return Err(FlowError::BadEdge);
+            }
         } else if block.successors.is_empty() {
             // An implicit fallthrough is not an accepted cleanup.
             return Err(FlowError::NoExit);
@@ -90,8 +110,12 @@ pub fn verify_all_paths(cfg: &[Block], entry: usize) -> Result<(), FlowError> {
     let mut exits = 0usize;
     while let Some((pc, mut state, ancestors)) = pending.pop_front() {
         // Joins with identical facts are benign, unlike genuine CFG cycles.
-        if !seen.insert((pc, state.clone())) { continue; }
-        if seen.len() > MAX_CFG_STATES { return Err(FlowError::Budget); }
+        if !seen.insert((pc, state.clone())) {
+            continue;
+        }
+        if seen.len() > MAX_CFG_STATES {
+            return Err(FlowError::Budget);
+        }
         let block = &cfg[pc];
         match block.action {
             Action::Ref { handle } => {
@@ -114,7 +138,9 @@ pub fn verify_all_paths(cfg: &[Block], entry: usize) -> Result<(), FlowError> {
                 }
             }
             Action::Unref { handle } => {
-                if !state.handles.contains(&handle) { return Err(FlowError::UseAfterUnref); }
+                if !state.handles.contains(&handle) {
+                    return Err(FlowError::UseAfterUnref);
+                }
                 if state.views.values().any(|&owner| owner == handle) {
                     return Err(FlowError::LiveViewOnUnref);
                 }
@@ -122,7 +148,9 @@ pub fn verify_all_paths(cfg: &[Block], entry: usize) -> Result<(), FlowError> {
                 state.consumed.insert(handle);
             }
             Action::Exit => {
-                if state.has_live() { return Err(FlowError::UnreleasedHandle); }
+                if state.has_live() {
+                    return Err(FlowError::UnreleasedHandle);
+                }
                 exits += 1;
             }
             Action::CallUnknown if state.has_live() => return Err(FlowError::UnsafeCall),
@@ -138,7 +166,9 @@ pub fn verify_all_paths(cfg: &[Block], entry: usize) -> Result<(), FlowError> {
             pending.push_back((next, state.clone(), next_ancestors.clone()));
         }
     }
-    if exits == 0 { return Err(FlowError::NoExit); }
+    if exits == 0 {
+        return Err(FlowError::NoExit);
+    }
     Ok(())
 }
 
@@ -147,7 +177,10 @@ mod tests {
     use super::*;
 
     fn b(action: Action, successors: &[usize]) -> Block {
-        Block { action, successors: successors.to_vec() }
+        Block {
+            action,
+            successors: successors.to_vec(),
+        }
     }
 
     #[test]
@@ -204,13 +237,15 @@ mod tests {
         for action in [Action::CallUnknown, Action::Suspend] {
             let cfg = [
                 b(Action::Ref { handle: 1 }, &[1]),
-                b(action.clone(), &[2]),
+                b(action, &[2]),
                 b(Action::Unref { handle: 1 }, &[3]),
                 b(Action::Exit, &[]),
             ];
             let expected = if matches!(action, Action::CallUnknown) {
                 FlowError::UnsafeCall
-            } else { FlowError::UnsafeSuspend };
+            } else {
+                FlowError::UnsafeSuspend
+            };
             assert_eq!(verify_all_paths(&cfg, 0), Err(expected));
         }
     }
@@ -229,10 +264,14 @@ mod tests {
     #[test]
     fn no_exit_and_invalid_edges_cannot_be_proved() {
         assert_eq!(verify_all_paths(&[], 0), Err(FlowError::Empty));
-        assert_eq!(verify_all_paths(&[b(Action::Nop, &[9])], 0),
-            Err(FlowError::BadEdge));
-        assert_eq!(verify_all_paths(&[b(Action::Nop, &[0])], 0),
-            Err(FlowError::NoExit));
+        assert_eq!(
+            verify_all_paths(&[b(Action::Nop, &[9])], 0),
+            Err(FlowError::BadEdge)
+        );
+        assert_eq!(
+            verify_all_paths(&[b(Action::Nop, &[0])], 0),
+            Err(FlowError::NoExit)
+        );
     }
 
     #[test]
