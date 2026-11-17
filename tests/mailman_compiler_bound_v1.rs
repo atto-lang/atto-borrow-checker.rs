@@ -421,3 +421,40 @@ fn invalid_broker_domain_epoch_and_mailman_ids_fail_closed() {
     assert_eq!(broker.prepare(1, &wrong_domain), Err(Error::WrongDomain));
     assert_eq!(broker.counts(1), Some((0, 0)));
 }
+
+#[test]
+fn synchronized_multi_mailman_contention_admits_only_one_transfer() {
+    use std::sync::{Arc, Barrier, Mutex};
+    use std::thread;
+
+    let broker = Arc::new(Mutex::new(
+        SharedTransferBroker::new(7, 12, 2, &[(1, 1), (2, 1)]).unwrap(),
+    ));
+    let start = Arc::new(Barrier::new(3));
+    let mut handles = Vec::new();
+    for (mailman, ticket) in [(1, 9), (2, 10)] {
+        let shared = Arc::clone(&broker);
+        let start = Arc::clone(&start);
+        handles.push(thread::spawn(move || {
+            let proof = verify(ticket, &graph(0, 1)).unwrap();
+            start.wait();
+            let result = shared.lock().unwrap().prepare(mailman, &proof);
+            (mailman, ticket, result)
+        }));
+    }
+    start.wait();
+    let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+    assert_eq!(results.iter().filter(|item| item.2.is_ok()).count(), 1);
+    assert_eq!(
+        results
+            .iter()
+            .filter(|item| item.2 == Err(Error::Delivery(DeliveryError::LeaseConflict)))
+            .count(),
+        1
+    );
+    let (winner, ticket, _) = results.iter().find(|item| item.2.is_ok()).unwrap();
+    broker.lock().unwrap().abort(*winner, u64::from(*ticket), 5).unwrap();
+    let guard = broker.lock().unwrap();
+    assert_eq!(guard.counts(1), Some((0, 0)));
+    assert_eq!(guard.counts(2), Some((0, 0)));
+}
