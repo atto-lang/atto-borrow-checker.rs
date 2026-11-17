@@ -182,3 +182,87 @@ fn zero_input_and_oversized_inventory_fail_closed() {
     c.observed_events = c.expected_events.clone();
     assert_eq!(verify_closed_census(&c).unwrap_err().code, Code::Budget);
 }
+
+
+#[test]
+fn ssa_phi_on_separate_edge_points_preserves_both_possible_loans() {
+    use EventKind::*;
+    // Branch-local loans 7 and 8 flow into fresh phi origin 30 on their
+    // OWN split edges, never by a join-wide, invented transitive alias.
+    let c = census(&[
+        (1, Point), (2, Point), (3, Point), (4, Point), (5, Point), (6, Point),
+        (1, Edge { to: 2 }), (1, Edge { to: 3 }),
+        (2, Edge { to: 4 }), (3, Edge { to: 5 }),
+        (4, Edge { to: 6 }), (5, Edge { to: 6 }),
+        (2, Issue { origin: 10, loan: 7 }),
+        (3, Issue { origin: 20, loan: 8 }),
+        (4, PhiEdge { from: 10, to: 30 }),
+        (5, PhiEdge { from: 20, to: 30 }),
+        (6, Use { origin: 30 }),
+    ]);
+    let report = verify_closed_census(&c).unwrap();
+    assert!(report.loans.live_loans_on_entry[&6].contains(&7));
+    assert!(report.loans.live_loans_on_entry[&6].contains(&8));
+    assert!(report.live_origins_on_entry[&2].contains(&10));
+    assert!(!report.live_origins_on_entry[&2].contains(&20));
+    assert!(report.live_origins_on_entry[&3].contains(&20));
+    assert!(!report.live_origins_on_entry[&3].contains(&10));
+}
+
+#[test]
+fn ssa_phi_at_unsplit_multi_predecessor_join_is_rejected() {
+    use EventKind::*;
+    let c = census(&[
+        (1, Point), (2, Point), (3, Point), (4, Point),
+        (1, Edge { to: 2 }), (1, Edge { to: 3 }),
+        (2, Edge { to: 4 }), (3, Edge { to: 4 }),
+        (2, Issue { origin: 10, loan: 7 }),
+        (4, PhiEdge { from: 10, to: 30 }),
+        (4, Use { origin: 30 }),
+    ]);
+    assert_eq!(verify_closed_census(&c).unwrap_err().code, Code::InvalidEvent);
+}
+
+#[test]
+fn ssa_phi_split_edge_must_have_single_successor() {
+    use EventKind::*;
+    let c = census(&[
+        (1, Point), (2, Point), (3, Point),
+        (1, Edge { to: 2 }), (2, Edge { to: 3 }), (2, Edge { to: 2 }),
+        (1, Issue { origin: 10, loan: 7 }),
+        (2, PhiEdge { from: 10, to: 20 }),
+        (3, Use { origin: 20 }),
+    ]);
+    assert_eq!(verify_closed_census(&c).unwrap_err().code, Code::InvalidEvent);
+}
+
+#[test]
+fn missing_phi_event_in_observed_mir_fails_census_before_analysis() {
+    use EventKind::*;
+    let mut c = census(&[
+        (1, Point), (2, Point), (3, Point), (1, Edge { to: 2 }),
+        (2, Edge { to: 3 }), (1, Issue { origin: 10, loan: 7 }),
+        (2, PhiEdge { from: 10, to: 20 }), (3, Use { origin: 20 }),
+    ]);
+    c.observed_events.retain(|e| !matches!(e.kind, PhiEdge { .. }));
+    assert_eq!(verify_closed_census(&c).unwrap_err().code, Code::Mismatch);
+}
+
+#[test]
+fn phi_result_preserves_invalidation_on_its_branch() {
+    use EventKind::*;
+    let c = census(&[
+        (1, Point), (2, Point), (3, Point), (4, Point),
+        (1, Edge { to: 2 }), (2, Edge { to: 3 }),
+        (3, Edge { to: 4 }),
+        (1, Issue { origin: 10, loan: 7 }),
+        (2, PhiEdge { from: 10, to: 20 }),
+        (3, Invalidate { loan: 7 }),
+        (4, Use { origin: 20 }),
+    ]);
+    let err = verify_closed_census(&c).unwrap_err();
+    match err.code {
+        Code::Lifetime(e) => assert_eq!((e.code, e.point, e.loan), (LoanCode::InvalidatedLoan, 3, Some(7))),
+        other => panic!("expected lifetime invalidation, got {other:?}"),
+    }
+}
