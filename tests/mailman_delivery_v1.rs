@@ -319,9 +319,22 @@ fn mailbox_prepare_commit_abort_are_single_use_and_bounded() {
     ledger.finish(9, 5).unwrap();
     assert_eq!(ledger.counts(), (0, 0));
 
+    // A committed transfer consumes these allocations permanently in this
+    // model ledger; a later ticket needs a genuinely fresh graph identity.
+    let mut fresh = cyclic();
+    fresh.root += 10;
+    for node in &mut fresh.nodes {
+        node.id += 10;
+        for child in &mut node.references {
+            *child += 10;
+        }
+    }
+    for id in &mut fresh.expected_reachable {
+        *id += 10;
+    }
     let mut later = request(DeliveryMode::Transfer);
     later.ticket = 10;
-    let later = verify_delivery(&graph, &later).unwrap();
+    let later = verify_delivery(&fresh, &later).unwrap();
     ledger.prepare(&later).unwrap();
     ledger.abort(10, 5).unwrap();
     assert_eq!(ledger.counts(), (0, 0));
