@@ -107,13 +107,21 @@ impl<'a> GraphCopyContext<'a> {
         if self.appended != 0 || !self.memo.is_empty() {
             return Err(Error("E_COPY_CONTEXT_REUSE"));
         }
-        let concrete = self.source.nodes.get(root).ok_or(Error("E_COPY_LAYOUT"))?.concrete_type;
-        admit_copy(self.descriptors, CopyRequest {
-            concrete_type: concrete,
-            static_type,
-            mode: CopyMode::Deep,
-            actor_send,
-        })?;
+        let concrete = self
+            .source
+            .nodes
+            .get(root)
+            .ok_or(Error("E_COPY_LAYOUT"))?
+            .concrete_type;
+        admit_copy(
+            self.descriptors,
+            CopyRequest {
+                concrete_type: concrete,
+                static_type,
+                mode: CopyMode::Deep,
+                actor_send,
+            },
+        )?;
         // Validate graph metadata against the admitted descriptors before
         // attempting allocation. A malicious caller cannot simply assert an
         // actor-Sendable witness to bypass actual type graph traversal.
@@ -136,7 +144,11 @@ impl<'a> GraphCopyContext<'a> {
         if self.appended >= self.max_nodes || depth >= MAX_CLONE_DEPTH {
             return Err(Error("E_COPY_GRAPH_BUDGET"));
         }
-        let src = self.source.nodes.get(source_id).ok_or(Error("E_COPY_LAYOUT"))?;
+        let src = self
+            .source
+            .nodes
+            .get(source_id)
+            .ok_or(Error("E_COPY_LAYOUT"))?;
         let type_id = src.concrete_type;
         // The source node must contain the COMPLETE flattened concrete field
         // inventory, including private/inherited base fields in base-first
@@ -149,7 +161,11 @@ impl<'a> GraphCopyContext<'a> {
                 return Err(Error("E_COPY_LAYOUT"));
             }
             ancestors.push(id);
-            cur = self.types.get(&id).ok_or(Error("E_COPY_AOT_WITNESS"))?.parent;
+            cur = self
+                .types
+                .get(&id)
+                .ok_or(Error("E_COPY_AOT_WITNESS"))?
+                .parent;
         }
         for id in ancestors.into_iter().rev() {
             layouts.extend(self.types[&id].fields.iter().cloned());
@@ -173,12 +189,19 @@ impl<'a> GraphCopyContext<'a> {
             let result = match (value, field.kind) {
                 (Slot::Scalar(v), FieldKind::Scalar) => Slot::Scalar(*v),
                 (Slot::Frozen(id), FieldKind::ImmutableShared) => Slot::Frozen(*id),
-                (Slot::Mutable(None), FieldKind::OwnedMutable(_) | FieldKind::SharedMutable(_)) =>
-                    Slot::Mutable(None),
-                (Slot::Mutable(Some(child)), FieldKind::OwnedMutable(expected)
-                    | FieldKind::SharedMutable(expected)) => {
-                    let actual = self.source.nodes.get(*child)
-                        .ok_or(Error("E_COPY_LAYOUT"))?.concrete_type;
+                (Slot::Mutable(None), FieldKind::OwnedMutable(_) | FieldKind::SharedMutable(_)) => {
+                    Slot::Mutable(None)
+                }
+                (
+                    Slot::Mutable(Some(child)),
+                    FieldKind::OwnedMutable(expected) | FieldKind::SharedMutable(expected),
+                ) => {
+                    let actual = self
+                        .source
+                        .nodes
+                        .get(*child)
+                        .ok_or(Error("E_COPY_LAYOUT"))?
+                        .concrete_type;
                     if actual != expected {
                         return Err(Error("E_COPY_LAYOUT"));
                     }
