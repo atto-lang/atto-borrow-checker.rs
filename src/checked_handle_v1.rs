@@ -117,6 +117,19 @@ impl CheckedHandleModel {
         Ok(ReadView { key: handle.key, lease, active: true })
     }
 
+    /// Proof boundary for a synchronous borrowed-parameter call: validate
+    /// that the view's lease remains active without consuming either token.
+    /// The caller may still retire the view when its lexical Atto block ends.
+    pub fn validate_readonly_arg(&self, view: &ReadView) -> Result<(), HandleError> {
+        if !view.active { return Err(HandleError::InvalidView); }
+        self.verify(view.key)?;
+        let slot = self.slots.get(&view.key.allocation).ok_or(HandleError::InvalidView)?;
+        if !slot.borrowed_as_handle || !slot.readers.contains(&view.lease) {
+            return Err(HandleError::InvalidView);
+        }
+        Ok(())
+    }
+
     pub fn release_view(&mut self, view: &mut ReadView) -> Result<(), HandleError> {
         if !view.active || self.live_views == 0 {
             return Err(HandleError::InvalidView);
@@ -253,5 +266,38 @@ mod scoped_block_regressions {
             model.release_view(view).unwrap();
         }
         let _restored = model.unref(&mut h).unwrap();
+    }
+}
+
+
+#[cfg(test)]
+mod borrowed_call_regressions {
+    use super::*;
+
+    #[test]
+    fn readonly_call_does_not_transfer_or_consume_the_scoped_view() {
+        let mut model = CheckedHandleModel::new(88, 3).unwrap();
+        let mut original = model.mint_owner().unwrap();
+        let mut handle = model.ref_owned(&mut original).unwrap();
+        let mut view = model.deref(&handle).unwrap();
+        for _ in 0..3 {
+            model.validate_readonly_arg(&view).unwrap();
+            assert_eq!(model.unref(&mut handle).unwrap_err(), HandleError::LiveViews);
+        }
+        model.release_view(&mut view).unwrap();
+        assert_eq!(model.validate_readonly_arg(&view).unwrap_err(), HandleError::InvalidView);
+        let _restored = model.unref(&mut handle).unwrap();
+    }
+
+    #[test]
+    fn readonly_call_rejects_foreign_models_and_stale_generations() {
+        let mut first = CheckedHandleModel::new(88, 3).unwrap();
+        let second = CheckedHandleModel::new(88, 3).unwrap();
+        let mut original = first.mint_owner().unwrap();
+        let handle = first.ref_owned(&mut original).unwrap();
+        let view = first.deref(&handle).unwrap();
+        assert_eq!(second.validate_readonly_arg(&view).unwrap_err(), HandleError::ForeignModel);
+        first.advance_generation(4).unwrap();
+        assert_eq!(first.validate_readonly_arg(&view).unwrap_err(), HandleError::StaleGeneration);
     }
 }
