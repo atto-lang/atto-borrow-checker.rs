@@ -101,10 +101,10 @@ impl CheckedHandleModel {
 
     pub fn deref(&mut self, handle: &Handle) -> Result<ReadView, HandleError> {
         if !handle.active { return Err(HandleError::InvalidHandle); }
+        self.verify(handle.key)?;
         if self.live_views >= MAX_LIVE_READ_VIEWS {
             return Err(HandleError::Exhausted);
         }
-        self.verify(handle.key)?;
         let next = self.next_lease.checked_add(1).ok_or(HandleError::Exhausted)?;
         let slot = self.slots.get_mut(&handle.key.allocation).ok_or(HandleError::InvalidHandle)?;
         if !slot.borrowed_as_handle { return Err(HandleError::InvalidHandle); }
