@@ -164,6 +164,14 @@ impl VerifiedDelivery {
     pub fn destination_actor_generation(&self) -> u64 {
         self.destination_actor_generation
     }
+
+    pub fn ticket(&self) -> u64 {
+        self.ticket
+    }
+
+    pub fn ticket_generation(&self) -> u64 {
+        self.ticket_generation
+    }
 }
 
 fn verify_inventory(inventory: &GraphInventory) -> Result<Vec<AllocationId>, Error> {
