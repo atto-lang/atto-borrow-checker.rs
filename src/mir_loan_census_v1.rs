@@ -8,7 +8,10 @@ use crate::mir_v1::{self, MirError, MirFunction};
 use crate::polonius_facts_v1::{Error, Facts, OriginId, OriginUse, Point, PointId};
 use crate::polonius_ssa_v1::{analyze_ssa, Definition, Input, PhiInput, SsaReport};
 use crate::Op;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+
+const MAX_DIAGNOSTIC_FACTS: usize = 100_000;
+const MAX_DIAGNOSTIC_LOANS: usize = 2_048;
 
 /// The full typed-MIR instruction ID must have exactly one fact row. These
 /// caller-supplied use/def origins are NOT authenticated by this interface.
@@ -57,8 +60,20 @@ pub fn project(
     mir: &MirFunction,
     evidence: &Evidence,
 ) -> Result<DiagnosticProjection, BridgeError> {
+    // Bound nested, caller-owned fact arrays BEFORE any copy/solver work.
+    // A 4096-row instruction census can otherwise hide millions of origins.
+    let mut fact_count = evidence.phi_edges.len();
+    for row in &evidence.instruction_facts {
+        fact_count = fact_count
+            .checked_add(row.use_origins.len())
+            .and_then(|n| n.checked_add(row.define_origins.len()))
+            .ok_or(BridgeError::Invalid("E_DIAGNOSTIC_FACT_BUDGET"))?;
+        if fact_count > MAX_DIAGNOSTIC_FACTS {
+            return Err(BridgeError::Invalid("E_DIAGNOSTIC_FACT_BUDGET"));
+        }
+    }
     // Enforce typed MIR contract, source ID inventory, effect agreement, and
-    // claimed provenance first. This does not authenticate the producer.
+    // claimed provenance next. This does not authenticate the producer.
     mir_v1::validate_and_lower(mir).map_err(BridgeError::Mir)?;
     let instruction_count: usize = mir.blocks.iter().map(|b| b.instructions.len()).sum();
     if instruction_count == 0
@@ -108,11 +123,78 @@ pub fn project(
         return Err(BridgeError::Invalid("E_DIAGNOSTIC_INCOMPLETE_CENSUS"));
     }
     let mut issued_loans = BTreeSet::new();
+    let mut borrowed_origins = BTreeSet::new();
+    let mut invalidating_operations = 0usize;
     for block in &mir.blocks {
         for instruction in &block.instructions {
-            if let Op::Borrow { loan, .. } = instruction.operation {
-                if loan == 0 || !issued_loans.insert(loan) {
-                    return Err(BridgeError::Invalid("E_DIAGNOSTIC_LOAN_ID"));
+            match instruction.operation {
+                Op::Borrow { loan, .. } => {
+                    if loan == 0 || !issued_loans.insert(loan) {
+                        return Err(BridgeError::Invalid("E_DIAGNOSTIC_LOAN_ID"));
+                    }
+                    // The provenance witness must be present on an actual
+                    // MIR Borrow, never on a free-standing caller fact.
+                    if let Some(origin) =
+                        facts_by_instruction[&instruction.instruction_id].borrow_origin
+                    {
+                        if origin != 0 {
+                            borrowed_origins.insert(origin);
+                        }
+                    }
+                    if issued_loans.len() > MAX_DIAGNOSTIC_LOANS {
+                        return Err(BridgeError::Invalid("E_DIAGNOSTIC_LOAN_BUDGET"));
+                    }
+                }
+                Op::Write { .. } | Op::Drop { .. } => {
+                    invalidating_operations += 1;
+                }
+                _ => {}
+            }
+        }
+    }
+    // Each destructive MIR instruction invalidates ALL loans in this
+    // conservative alias model. Cap the expanded fact set up front.
+    let expanded = issued_loans
+        .len()
+        .checked_mul(invalidating_operations)
+        .and_then(|n| n.checked_add(fact_count))
+        .ok_or(BridgeError::Invalid("E_DIAGNOSTIC_FACT_BUDGET"))?;
+    if expanded > MAX_DIAGNOSTIC_FACTS {
+        return Err(BridgeError::Invalid("E_DIAGNOSTIC_FACT_BUDGET"));
+    }
+
+    // Borrowed SSA origins may pass through phi joins, but a phi result is
+    // accepted as a return witness only when ALL of its incoming origins
+    // can be traced back to explicit MIR Borrow operations. This is still
+    // caller-supplied origin metadata, not authenticated compiler evidence.
+    let mut phi_sources = BTreeMap::<OriginId, BTreeSet<OriginId>>::new();
+    let mut phi_dependents = BTreeMap::<OriginId, BTreeSet<OriginId>>::new();
+    for edge in &evidence.phi_edges {
+        phi_sources
+            .entry(edge.destination)
+            .or_default()
+            .insert(edge.source);
+        phi_dependents
+            .entry(edge.source)
+            .or_default()
+            .insert(edge.destination);
+    }
+    let mut remaining: BTreeMap<OriginId, usize> = phi_sources
+        .iter()
+        .map(|(&origin, sources)| (origin, sources.len()))
+        .collect();
+    let mut queue: VecDeque<OriginId> = borrowed_origins.iter().copied().collect();
+    while let Some(origin) = queue.pop_front() {
+        if let Some(destinations) = phi_dependents.get(&origin) {
+            for &destination in destinations {
+                let count = remaining
+                    .get_mut(&destination)
+                    .expect("indexed phi destination");
+                if *count > 0 {
+                    *count -= 1;
+                    if *count == 0 && borrowed_origins.insert(destination) {
+                        queue.push_back(destination);
+                    }
                 }
             }
         }
@@ -203,13 +285,23 @@ pub fn project(
                     if !issued_loans.is_empty() && row.use_origins.is_empty() {
                         return Err(BridgeError::Invalid("E_DIAGNOSTIC_RETURN_WITNESS_REQUIRED"));
                     }
+                    if !issued_loans.is_empty()
+                        && !row
+                            .use_origins
+                            .iter()
+                            .any(|origin| borrowed_origins.contains(origin))
+                    {
+                        return Err(BridgeError::Invalid(
+                            "E_DIAGNOSTIC_RETURN_BORROW_PROVENANCE",
+                        ));
+                    }
                 }
                 _ => return Err(BridgeError::Invalid("E_DIAGNOSTIC_UNMODELED_OPERATION")),
             }
             points.push(point);
         }
     }
-    if uses.len().saturating_add(definitions.len()) > 100_000 {
+    if uses.len().saturating_add(definitions.len()) > MAX_DIAGNOSTIC_FACTS {
         return Err(BridgeError::Invalid("E_DIAGNOSTIC_FACT_BUDGET"));
     }
     let mut phi_inputs = Vec::new();

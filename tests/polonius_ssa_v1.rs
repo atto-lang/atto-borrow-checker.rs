@@ -195,3 +195,26 @@ fn raw_caller_liveness_is_not_accepted() {
     input.template.points[0].live_origins = vec![10];
     assert_eq!(analyze_ssa(&input).unwrap_err().code, Code::InvalidFact);
 }
+
+#[test]
+fn entry_block_phi_cannot_omit_the_implicit_caller_predecessor() {
+    let mut entry = point(1, &[2]);
+    entry.issue.push((10, 7));
+    let mut backedge = point(2, &[1]);
+    backedge.issue.push((20, 8));
+    let input = Input {
+        template: Facts {
+            entry: 1,
+            points: vec![entry, backedge],
+        },
+        uses: vec![used(2, 30)],
+        definitions: vec![definition(1, 10), definition(1, 30), definition(2, 20)],
+        phi_inputs: vec![PhiInput {
+            predecessor: 2,
+            successor: 1,
+            source: 20,
+            destination: 30,
+        }],
+    };
+    assert_eq!(analyze_ssa(&input).unwrap_err().code, Code::InvalidFact);
+}

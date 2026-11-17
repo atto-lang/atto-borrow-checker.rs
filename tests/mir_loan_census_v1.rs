@@ -176,3 +176,76 @@ fn no_silent_acceptance_of_unknown_suspension() {
         Err(BridgeError::Invalid("E_DIAGNOSTIC_UNMODELED_OPERATION"))
     );
 }
+
+#[test]
+fn oversized_nested_use_census_is_rejected_before_solver_copy() {
+    let (mir, mut evidence) = source();
+    evidence.instruction_facts[0].use_origins = vec![10; 100_001];
+    assert_eq!(
+        project(&mir, &evidence),
+        Err(BridgeError::Invalid("E_DIAGNOSTIC_FACT_BUDGET"))
+    );
+}
+
+#[test]
+fn mass_write_invalidation_cannot_multiply_into_unbounded_facts() {
+    let (mut mir, mut evidence) = source();
+    let mut next_id = 9u64;
+    // 257 issued loans * 401 invalidating writes exceeds the fact budget.
+    let mut additions = Vec::new();
+    for loan in 100..355u32 {
+        additions.push(ins(
+            next_id,
+            Effect::Ownership,
+            Op::Borrow {
+                owner: 1,
+                loan,
+                kind: BorrowKind::Mutable,
+            },
+        ));
+        evidence
+            .instruction_facts
+            .push(row(next_id, &[], &[], None));
+        mir.expected_instruction_ids.push(next_id);
+        next_id += 1;
+    }
+    for _ in 0..400 {
+        additions.push(ins(next_id, Effect::Ownership, Op::Write { owner: 1 }));
+        evidence
+            .instruction_facts
+            .push(row(next_id, &[], &[], None));
+        mir.expected_instruction_ids.push(next_id);
+        next_id += 1;
+    }
+    let terminal = mir.blocks[2].instructions.pop().expect("terminal return");
+    mir.blocks[2].instructions.extend(additions);
+    mir.blocks[2].instructions.push(terminal);
+    assert_eq!(
+        project(&mir, &evidence),
+        Err(BridgeError::Invalid("E_DIAGNOSTIC_FACT_BUDGET"))
+    );
+}
+
+#[test]
+fn unrelated_ssa_origin_cannot_fake_a_borrowed_return_witness() {
+    let (mir, mut evidence) = source();
+    // A declaration at an ordinary Init does not prove that Return
+    // carries the mutable loan created by Borrow.
+    evidence.instruction_facts[0].define_origins.push(99);
+    evidence.instruction_facts[2].use_origins = vec![99];
+    assert_eq!(
+        project(&mir, &evidence),
+        Err(BridgeError::Invalid(
+            "E_DIAGNOSTIC_RETURN_BORROW_PROVENANCE"
+        ))
+    );
+}
+
+#[test]
+fn census_row_order_cannot_change_borrowed_return_verdict() {
+    let (mir, mut evidence) = source();
+    let first = project(&mir, &evidence).unwrap();
+    evidence.instruction_facts.reverse();
+    let second = project(&mir, &evidence).unwrap();
+    assert_eq!(first, second);
+}
