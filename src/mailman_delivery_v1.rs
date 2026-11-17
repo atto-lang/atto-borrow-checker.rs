@@ -156,6 +156,14 @@ impl VerifiedDelivery {
     pub fn reachable(&self) -> &[AllocationId] {
         &self.reachable
     }
+
+    pub fn source_actor_generation(&self) -> u64 {
+        self.source_actor_generation
+    }
+
+    pub fn destination_actor_generation(&self) -> u64 {
+        self.destination_actor_generation
+    }
 }
 
 fn verify_inventory(inventory: &GraphInventory) -> Result<Vec<AllocationId>, Error> {
