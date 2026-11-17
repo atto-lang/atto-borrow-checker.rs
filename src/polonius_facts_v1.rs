@@ -56,7 +56,11 @@ pub struct Error {
     pub loan: Option<LoanId>,
 }
 fn error(code: Code, point: PointId) -> Error {
-    Error { code, point, loan: None }
+    Error {
+        code,
+        point,
+        loan: None,
+    }
 }
 /// MAY-live loans on each instruction's entry. This is an observation, not an
 /// independently authenticated compiler / runtime capability.
@@ -66,7 +70,9 @@ pub struct Report {
     pub steps: usize,
 }
 fn charge(steps: &mut usize, cost: usize, point: PointId) -> Result<(), Error> {
-    *steps = steps.checked_add(cost).ok_or_else(|| error(Code::WorkBudget, point))?;
+    *steps = steps
+        .checked_add(cost)
+        .ok_or_else(|| error(Code::WorkBudget, point))?;
     if *steps > MAX_WORK {
         return Err(error(Code::WorkBudget, point));
     }
@@ -87,14 +93,20 @@ fn preflight(facts: &Facts) -> Result<BTreeMap<PointId, &Point>, Error> {
         if p.id == 0 || points.insert(p.id, p).is_some() {
             return Err(error(Code::InvalidGraph, p.id));
         }
-        edges = edges.checked_add(p.successors.len()).ok_or_else(|| error(Code::Budget, p.id))?;
-        let n = p.live_origins.len()
+        edges = edges
+            .checked_add(p.successors.len())
+            .ok_or_else(|| error(Code::Budget, p.id))?;
+        let n = p
+            .live_origins
+            .len()
             .checked_add(p.subset.len())
             .and_then(|n| n.checked_add(p.issue.len()))
             .and_then(|n| n.checked_add(p.kill.len()))
             .and_then(|n| n.checked_add(p.invalidate.len()))
             .ok_or_else(|| error(Code::Budget, p.id))?;
-        fact_count = fact_count.checked_add(n).ok_or_else(|| error(Code::Budget, p.id))?;
+        fact_count = fact_count
+            .checked_add(n)
+            .ok_or_else(|| error(Code::Budget, p.id))?;
         if edges > MAX_EDGES || fact_count > MAX_INPUT_FACTS {
             return Err(error(Code::Budget, p.id));
         }
@@ -155,7 +167,11 @@ fn preflight(facts: &Facts) -> Result<BTreeMap<PointId, &Point>, Error> {
     }
     for (point, loan) in loan_references {
         if !issued.contains(&loan) {
-            return Err(Error { code: Code::UnknownLoan, point, loan: Some(loan) });
+            return Err(Error {
+                code: Code::UnknownLoan,
+                point,
+                loan: Some(loan),
+            });
         }
     }
     // Orphan points could hide omitted CFG effects; fail closed.
@@ -215,7 +231,11 @@ pub fn analyze(facts: &Facts) -> Result<Report, Error> {
         let loans: BTreeSet<LoanId> = local.iter().map(|&(_, loan)| loan).collect();
         for &loan in &p.invalidate {
             if loans.contains(&loan) {
-                return Err(Error { code: Code::InvalidatedLoan, point, loan: Some(loan) });
+                return Err(Error {
+                    code: Code::InvalidatedLoan,
+                    point,
+                    loan: Some(loan),
+                });
             }
         }
         active.insert(point, loans);
@@ -249,7 +269,9 @@ pub fn analyze(facts: &Facts) -> Result<Report, Error> {
             for &pair in &local {
                 charge(&mut steps, 1, point)?;
                 if target.insert(pair) {
-                    retained = retained.checked_add(1).ok_or_else(|| error(Code::Budget, succ))?;
+                    retained = retained
+                        .checked_add(1)
+                        .ok_or_else(|| error(Code::Budget, succ))?;
                     if target.len() > MAX_FACTS_PER_POINT || retained > MAX_RETAINED_FACTS {
                         return Err(error(Code::Budget, succ));
                     }
@@ -261,5 +283,8 @@ pub fn analyze(facts: &Facts) -> Result<Report, Error> {
             }
         }
     }
-    Ok(Report { live_loans_on_entry: active, steps })
+    Ok(Report {
+        live_loans_on_entry: active,
+        steps,
+    })
 }
