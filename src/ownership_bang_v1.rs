@@ -68,6 +68,15 @@ pub struct BangSite {
     pub place_is_writable: bool,
 }
 
+/// Source-owned census and mapping contract. An independently generated
+/// instruction-ID list must be supplied; do not construct it by mapping sites.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BangManifest {
+    pub version: String,
+    pub sites: Vec<BangSite>,
+    pub source_bang_instruction_ids: Vec<u64>,
+}
+
 /// Differentiate a malformed source-to-MIR adapter from an unsafe MIR graph.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum BangError {
@@ -170,9 +179,13 @@ fn expected_operation(site: &BangSite) -> Result<Op, BangError> {
 /// source authenticity. A positive proof does not certify machine-code output.
 pub fn verify_bang_mir(
     function: &MirFunction,
-    sites: &[BangSite],
-    source_bang_instruction_ids: &[u64],
+    manifest: &BangManifest,
 ) -> Result<Proof, BangError> {
+    if manifest.version != CONTRACT_VERSION {
+        return Err(BangError::Invalid("E_BANG_VERSION"));
+    }
+    let sites = &manifest.sites;
+    let source_bang_instruction_ids = &manifest.source_bang_instruction_ids;
     if sites.len() > MAX_BANG_SITES || source_bang_instruction_ids.len() > MAX_BANG_SITES {
         return Err(BangError::Invalid("E_BANG_INVENTORY_BUDGET"));
     }
@@ -199,7 +212,7 @@ pub fn verify_bang_mir(
     for block in &function.blocks {
         for instruction in &block.instructions {
             if let Some((node, op)) = actual.get(&instruction.instruction_id) {
-                if instruction.source_node_id != *node || instruction.operation != *op {
+                if instruction.source_node_id != *node || &instruction.operation != op {
                     return Err(BangError::Invalid("E_BANG_MIR_MISMATCH"));
                 }
                 if !seen.insert(instruction.instruction_id) {
