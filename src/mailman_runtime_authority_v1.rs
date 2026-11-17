@@ -594,3 +594,8 @@ impl ReceivedTransfer {
         Ok(())
     }
 }
+
+
+#[cfg(test)]
+#[path = "mailman_runtime_authority_v1_tests.rs"]
+mod tests;
