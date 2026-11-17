@@ -18,6 +18,9 @@ pub struct AllocationKey {
 const MAX_NODES: usize = 4096;
 const MAX_EDGES: usize = 16384;
 const MAX_TICKETS: usize = 4096;
+// Limit accumulated ticket graph metadata independently of ticket count.
+const MAX_HELD_GRAPH_KEYS: usize = 65_536;
+const MAX_RETIRED_GRAPH_KEYS: usize = 65_536;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DeliveryMode {
@@ -400,6 +403,7 @@ pub struct DeliveryLedger {
     destination_actor_generation: u64,
     reserved: usize,
     committed: usize,
+    held_graph_keys: usize,
     pending: BTreeMap<(u64, u64), Ticket>,
     delivered: BTreeMap<(u64, u64), Ticket>,
     seen: BTreeSet<(u64, u64)>,
@@ -418,6 +422,7 @@ impl DeliveryLedger {
             destination_actor_generation,
             reserved: 0,
             committed: 0,
+            held_graph_keys: 0,
             pending: BTreeMap::new(),
             delivered: BTreeMap::new(),
             seen: BTreeSet::new(),
@@ -443,7 +448,21 @@ impl DeliveryLedger {
         {
             return Err(Error::DuplicateTicket);
         }
-        if self.seen.len() >= MAX_TICKETS {
+        if self.seen.len() >= MAX_TICKETS
+            || self.held_graph_keys.saturating_add(proof.keys.len()) > MAX_HELD_GRAPH_KEYS
+        {
+            return Err(Error::TicketLimit);
+        }
+        if matches!(
+            proof.selected,
+            SelectedDelivery::Transfer | SelectedDelivery::ElidedDeepCopy
+        ) && self.consumed.len().saturating_add(proof.keys.len()) > MAX_RETIRED_GRAPH_KEYS
+        {
+            return Err(Error::TicketLimit);
+        }
+        if proof.selected == SelectedDelivery::FrozenShare
+            && self.frozen_shared.len().saturating_add(proof.keys.len()) > MAX_RETIRED_GRAPH_KEYS
+        {
             return Err(Error::TicketLimit);
         }
         if self.reserved.saturating_add(self.committed) >= self.capacity {
@@ -478,6 +497,7 @@ impl DeliveryLedger {
             },
         );
         self.reserved += 1;
+        self.held_graph_keys += proof.keys.len();
         Ok(())
     }
 
@@ -542,6 +562,7 @@ impl DeliveryLedger {
             .ok_or(Error::UnknownTicket)?;
         self.release_guards(value.selected, &value.keys);
         self.reserved -= 1;
+        self.held_graph_keys -= value.keys.len();
         Ok(())
     }
 
@@ -607,6 +628,7 @@ impl DeliveryLedger {
             self.release_guards(value.selected, &value.keys);
         }
         self.committed -= 1;
+        self.held_graph_keys -= value.keys.len();
         Ok(())
     }
 
