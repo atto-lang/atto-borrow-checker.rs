@@ -20,7 +20,7 @@ The native checker must deny everything the authoritative contract denies. A nat
 | Atto source | Exact canonical MIR operation | Gate |
 | --- | --- | --- |
 | `copy! x` | `Op::Copy { from, into }` | source owned, transitive Copy proof |
-| `copy! borrowed_x` | `Op::CopyThrough { owner, loan, into }` | attached active loan to the canonical root, Copy proof; destination becomes **owned** |
+| `copy! borrowed_x` | `Op::CopyThrough { owner, loan, into }` | attached active loan to the canonical root, Copy proof and independent no-borrowed-referents **detached-value** proof; destination becomes **owned** |
 | `take! x` | `Op::Move { from, into }` | exclusive owned authority, no live loans, no use after move |
 | `borrow! x` | `Op::Borrow { kind: Shared, .. }` | authenticated addressable owned place; multiple readers |
 | `borrow! mut x` | `Op::Borrow { kind: Mutable, .. }` | writable place and exclusive loan, no competing loan |
@@ -55,7 +55,7 @@ The V0 graph uses canonical alias roots only; a projected place must have a comp
 
 ## Loan-bound access
 
-V0 now also models `ReadThrough { owner, loan }` and `CopyThrough { owner, loan, into }`. Both require a live matching loan. `CopyThrough` requires `Copy` and creates a fresh owned snapshot, while leaving the original loan and root intact; loan IDs cannot be manufactured after release. `WriteThrough` remains exclusive-mutable-only. Generic owner reads cannot authorize reading through an expired loan.
+V0 now also models `ReadThrough { owner, loan }` and `CopyThrough { owner, loan, into }`. Both require a live matching loan. `CopyThrough` requires `Copy` **and** an explicit compiler-attested detached-value/escape proof to exclude copies of references or borrowed handles. It creates a fresh owned snapshot, while leaving the original loan and root intact; loan IDs cannot be manufactured after release. `WriteThrough` remains exclusive-mutable-only. Generic owner reads cannot authorize reading through an expired loan.
 
 The full models remain intentionally different:
 - V0/typed MIR: acyclic, root-only ownership, loan-bound access, deterministic cleanup proposal. No true NLL, exceptional cleanup, or pinned suspend.
