@@ -212,7 +212,11 @@ pub fn analyze_ssa(input: &Input) -> Result<SsaReport, Error> {
     let mut phi_by_edge = BTreeMap::<(PointId, PointId, OriginId), OriginId>::new();
     let mut phi_destinations = BTreeMap::<PointId, BTreeSet<OriginId>>::new();
     for &phi in &input.phi_inputs {
-        if phi.source == phi.destination
+        // Entry is reached from the caller as well as potential backedges;
+        // a CFG-only predecessor census cannot account for that implicit edge.
+        // An entry-block phi would therefore silently omit one operand.
+        if phi.successor == facts.entry
+            || phi.source == phi.destination
             || !points.contains_key(&phi.predecessor)
             || !points.contains_key(&phi.successor)
             || !graph[&phi.predecessor].contains(&phi.successor)
