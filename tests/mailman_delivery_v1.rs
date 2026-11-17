@@ -197,12 +197,23 @@ fn cross_heap_handoff_cannot_claim_physical_zero_copy() {
         DeliveryMode::Transfer,
         DeliveryMode::ReadLease,
         DeliveryMode::WriteLease,
-        DeliveryMode::FrozenShare,
     ] {
         let mut req = request(mode);
         req.destination_domain = 13;
         assert_eq!(err(&graph, &req), Error::CrossDomainZeroCopy);
     }
+    let mut frozen = cyclic();
+    for node in &mut frozen.nodes {
+        node.mutable = false;
+        node.frozen = true;
+        node.sync = true;
+    }
+    let mut share = request(DeliveryMode::FrozenShare);
+    share.destination_domain = 13;
+    assert_eq!(
+        err(&frozen, &share),
+        Error::CrossDomainZeroCopy
+    );
     let mut req = request(DeliveryMode::DeepCopy);
     req.destination_domain = 13;
     assert_eq!(
@@ -383,7 +394,7 @@ fn unknown_ticket_and_double_settlement_never_mutate_counts() {
 #[test]
 fn simultaneous_lease_requests_are_region_wide_and_conflict_before_admission() {
     let graph = cyclic();
-    let mut read_one = request(DeliveryMode::ReadLease);
+    let read_one = request(DeliveryMode::ReadLease);
     let mut read_two = request(DeliveryMode::ReadLease);
     read_two.ticket = 10;
     let mut write = request(DeliveryMode::WriteLease);
