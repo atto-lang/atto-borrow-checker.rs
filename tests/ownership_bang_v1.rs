@@ -56,6 +56,7 @@ fn site(id: u64, verb: Verb) -> BangSite {
         loan: None,
         region: None,
         place_is_writable: false,
+        detached_copy_proven: false,
     }
 }
 
@@ -192,7 +193,7 @@ fn borrowed_copy_creates_owned_snapshot_that_may_be_shared_later() {
     let p = mir(vec![
         init(true, true),
         Op::Borrow { owner: 1, loan: 10, kind: BorrowKind::Shared },
-        Op::CopyThrough { owner: 1, loan: 10, into: 2 },
+        Op::CopyThrough { owner: 1, loan: 10, into: 2, detached_proven: true },
         Op::EndBorrow { loan: 10 },
         Op::PublishFrozen { owner: 2, region: 3, sync_proven: true },
         Op::Return,
@@ -203,6 +204,7 @@ fn borrowed_copy_creates_owned_snapshot_that_may_be_shared_later() {
     snapshot.loan = Some(10);
     snapshot.into = Some(2);
     snapshot.source_authority = SourceAuthority::BorrowedLoan;
+    snapshot.detached_copy_proven = true;
     let mut share = site(5, Verb::Share);
     share.from = 2;
     share.region = Some(3);
@@ -213,13 +215,14 @@ fn borrowed_copy_creates_owned_snapshot_that_may_be_shared_later() {
 fn borrowed_copy_requires_an_actually_live_matching_loan() {
     let p = mir(vec![
         init(true, true),
-        Op::CopyThrough { owner: 1, loan: 999, into: 2 },
+        Op::CopyThrough { owner: 1, loan: 999, into: 2, detached_proven: true },
         Op::Return,
     ]);
     let mut s = site(2, Verb::Copy);
     s.source_authority = SourceAuthority::BorrowedLoan;
     s.into = Some(2);
     s.loan = Some(999);
+    s.detached_copy_proven = true;
     assert_eq!(unsafe_code(&p, &[s]), "E_LOAN_NOT_ACTIVE_OR_WRONG_OWNER");
 }
 
@@ -401,4 +404,33 @@ fn rejects_bang_manifest_version_skew() {
         source_bang_instruction_ids: vec![2],
     };
     assert_eq!(verify_bang_mir(&p, &manifest), Err(BangError::Invalid("E_BANG_VERSION")));
+}
+
+#[test]
+fn borrowed_copy_cannot_claim_a_detached_owner_without_type_escape_proof() {
+    let p = mir(vec![
+        init(true, true),
+        Op::Borrow { owner: 1, loan: 10, kind: BorrowKind::Shared },
+        Op::CopyThrough { owner: 1, loan: 10, into: 2, detached_proven: false },
+        Op::EndBorrow { loan: 10 },
+        Op::Return,
+    ]);
+    let mut borrow = site(2, Verb::Borrow);
+    borrow.loan = Some(10);
+    let mut copied = site(3, Verb::Copy);
+    copied.source_authority = SourceAuthority::BorrowedLoan;
+    copied.loan = Some(10);
+    copied.into = Some(2);
+    assert_eq!(unsafe_code(&p, &[borrow.clone(), copied.clone()]), "E_DETACHED_COPY_PROOF_REQUIRED");
+    copied.detached_copy_proven = true;
+    assert_eq!(check(&p, &[borrow, copied]), Err(BangError::Invalid("E_BANG_MIR_MISMATCH")));
+}
+
+#[test]
+fn unused_detach_witness_cannot_launder_an_owned_copy() {
+    let p = mir(vec![init(true, true), Op::Copy { from: 1, into: 2 }, Op::Return]);
+    let mut s = site(2, Verb::Copy);
+    s.into = Some(2);
+    s.detached_copy_proven = true;
+    assert_eq!(check(&p, &[s]), Err(BangError::Invalid("E_BANG_UNUSED_DETACH_PROOF")));
 }
