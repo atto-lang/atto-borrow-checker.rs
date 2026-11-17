@@ -116,7 +116,7 @@ fn function(ticket: u32) -> MirFunction {
     }
 }
 
-fn make_census(program: &MirFunction, ticket: u32) -> CompilerSendCensus {
+fn make_census(program: &MirFunction, ticket: u32, root: u32) -> CompilerSendCensus {
     CompilerSendCensus {
         version: CONTRACT_VERSION.into(),
         producer: program.producer.clone(),
@@ -125,6 +125,7 @@ fn make_census(program: &MirFunction, ticket: u32) -> CompilerSendCensus {
             source_node_id: 102,
             owner: 1,
             ticket,
+            root_allocation: root,
         }],
     }
 }
@@ -133,7 +134,7 @@ fn verify(ticket: u32, graph: &GraphInventory) -> Result<CompilerBoundTransfer, 
     let program = function(ticket);
     verify_compiler_transfer(
         &program,
-        &make_census(&program, ticket),
+        &make_census(&program, ticket, graph.root),
         graph,
         &request(ticket.into()),
     )
@@ -151,13 +152,13 @@ fn verifies_complete_typed_mir_and_opaque_graph_transfer() {
 #[test]
 fn rejects_missing_duplicate_mismatched_and_overbudget_source_sites() {
     let program = function(9);
-    let mut census = make_census(&program, 9);
+    let mut census = make_census(&program, 9, 1);
     census.source_transfer_sites.clear();
     assert_eq!(
         verify_compiler_transfer(&program, &census, &graph(0, 1), &request(9)).unwrap_err(),
         Error::InvalidSite
     );
-    census = make_census(&program, 9);
+    census = make_census(&program, 9, 1);
     census
         .source_transfer_sites
         .push(census.source_transfer_sites[0].clone());
@@ -165,43 +166,50 @@ fn rejects_missing_duplicate_mismatched_and_overbudget_source_sites() {
         verify_compiler_transfer(&program, &census, &graph(0, 1), &request(9)).unwrap_err(),
         Error::DuplicateSite
     );
-    census = make_census(&program, 9);
+    census = make_census(&program, 9, 1);
     census.source_transfer_sites[0].source_node_id = 999;
     assert_eq!(
         verify_compiler_transfer(&program, &census, &graph(0, 1), &request(9)).unwrap_err(),
         Error::SendSiteMismatch
     );
-    census = make_census(&program, 9);
+    census = make_census(&program, 9, 1);
     census.source_transfer_sites[0].ticket = 10;
     assert_eq!(
         verify_compiler_transfer(&program, &census, &graph(0, 1), &request(9)).unwrap_err(),
         Error::SendSiteMismatch
     );
-    census = make_census(&program, 9);
+    census = make_census(&program, 9, 1);
     census.source_transfer_sites[0].instruction_id = 300;
     assert_eq!(
         verify_compiler_transfer(&program, &census, &graph(0, 1), &request(9)).unwrap_err(),
         Error::IncompleteCensus
     );
-    census = make_census(&program, 9);
+    census = make_census(&program, 9, 1);
     census.source_transfer_sites[0].owner = 2;
     assert_eq!(
         verify_compiler_transfer(&program, &census, &graph(0, 1), &request(9)).unwrap_err(),
         Error::SendSiteMismatch
     );
-    census = make_census(&program, 9);
+    census = make_census(&program, 9, 1);
+    census.source_transfer_sites[0].root_allocation = 2;
+    assert_eq!(
+        verify_compiler_transfer(&program, &census, &graph(0, 1), &request(9)).unwrap_err(),
+        Error::RootBindingMismatch
+    );
+    census = make_census(&program, 9, 1);
     census.source_transfer_sites[0].owner = 0;
     assert_eq!(
         verify_compiler_transfer(&program, &census, &graph(0, 1), &request(9)).unwrap_err(),
         Error::InvalidSite
     );
-    census = make_census(&program, 9);
+    census = make_census(&program, 9, 1);
     census.source_transfer_sites = (0..4097)
         .map(|i| SourceTransferSite {
             instruction_id: (i + 1) as u64,
             source_node_id: (i + 101) as u64,
             owner: 1,
             ticket: (i + 1) as u32,
+            root_allocation: 1,
         })
         .collect();
     assert_eq!(
@@ -213,13 +221,13 @@ fn rejects_missing_duplicate_mismatched_and_overbudget_source_sites() {
 #[test]
 fn rejects_wrong_version_producer_and_unauthenticated_mir_claims() {
     let program = function(9);
-    let mut c = make_census(&program, 9);
+    let mut c = make_census(&program, 9, 1);
     c.version = "untrusted".into();
     assert_eq!(
         verify_compiler_transfer(&program, &c, &graph(0, 1), &request(9)).unwrap_err(),
         Error::CensusVersion
     );
-    c = make_census(&program, 9);
+    c = make_census(&program, 9, 1);
     c.producer.source_sha256 = "c".repeat(64);
     assert_eq!(
         verify_compiler_transfer(&program, &c, &graph(0, 1), &request(9)).unwrap_err(),
@@ -230,7 +238,7 @@ fn rejects_wrong_version_producer_and_unauthenticated_mir_claims() {
     assert!(matches!(
         verify_compiler_transfer(
             &invalid,
-            &make_census(&invalid, 9),
+            &make_census(&invalid, 9, 1),
             &graph(0, 1),
             &request(9)
         ),
@@ -241,7 +249,7 @@ fn rejects_wrong_version_producer_and_unauthenticated_mir_claims() {
     assert!(matches!(
         verify_compiler_transfer(
             &wrong_effect,
-            &make_census(&wrong_effect, 9),
+            &make_census(&wrong_effect, 9, 1),
             &graph(0, 1),
             &request(9)
         ),
@@ -260,7 +268,7 @@ fn missing_rollback_path_or_unmodeled_actor_operation_fails_closed() {
     program.expected_instruction_ids = (1..=5).collect();
     assert!(verify_compiler_transfer(
         &program,
-        &make_census(&program, 9),
+        &make_census(&program, 9, 1),
         &graph(0, 1),
         &request(9)
     )
@@ -275,7 +283,7 @@ fn missing_rollback_path_or_unmodeled_actor_operation_fails_closed() {
     unsupported.expected_instruction_ids.push(8);
     assert!(verify_compiler_transfer(
         &unsupported,
-        &make_census(&unsupported, 9),
+        &make_census(&unsupported, 9, 1),
         &graph(0, 1),
         &request(9)
     )
@@ -285,7 +293,7 @@ fn missing_rollback_path_or_unmodeled_actor_operation_fails_closed() {
 #[test]
 fn disallows_other_delivery_modes_and_wrong_graph_domains() {
     let program = function(9);
-    let c = make_census(&program, 9);
+    let c = make_census(&program, 9, 1);
     let mut r = request(9);
     for mode in [
         DeliveryMode::DeepCopy,
@@ -428,7 +436,7 @@ fn invalid_broker_domain_epoch_and_mailman_ids_fail_closed() {
         let mut r = request(10);
         r.destination_actor_generation = 13;
         let program = function(10);
-        verify_compiler_transfer(&program, &make_census(&program, 10), &graph(0, 1), &r).unwrap()
+        verify_compiler_transfer(&program, &make_census(&program, 10, 1), &graph(0, 1), &r).unwrap()
     };
     assert_eq!(
         broker.prepare(1, &wrong_epoch),
@@ -443,7 +451,7 @@ fn invalid_broker_domain_epoch_and_mailman_ids_fail_closed() {
             node.owner_domain = 8;
         }
         let program = function(11);
-        verify_compiler_transfer(&program, &make_census(&program, 11), &g, &r).unwrap()
+        verify_compiler_transfer(&program, &make_census(&program, 11, 1), &g, &r).unwrap()
     };
     assert_eq!(broker.prepare(1, &wrong_domain), Err(Error::WrongDomain));
     assert_eq!(broker.counts(1), Some((0, 0)));
