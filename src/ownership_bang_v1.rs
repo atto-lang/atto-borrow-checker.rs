@@ -205,7 +205,8 @@ pub fn verify_bang_mir(
             return Err(BangError::Invalid("E_BANG_DUPLICATE_SITE"));
         }
     }
-    if expected != actual.keys().copied().collect() {
+    let observed: BTreeSet<_> = actual.keys().copied().collect();
+    if expected != observed {
         return Err(BangError::Invalid("E_BANG_INCOMPLETE_SOURCE_CENSUS"));
     }
     let mut seen = BTreeSet::new();
