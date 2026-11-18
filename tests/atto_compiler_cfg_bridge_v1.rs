@@ -97,7 +97,6 @@ fn write_before_last_borrow_use_is_detected() {
     let mut source = basic();
     source = source.replace("P|5|M|1|0|0|0|4|-|-|0|0", "P|5|M|1|0|0|0|2|-|-|0|0");
     source = source.replace("P|2|S|0|0|0|0|1|-|-|0|0", "P|2|S|0|0|0|0|4|-|-|0|0");
-    source = source.replace("P|4|S|0|1|0|0|3|1:0|-|0|0", "P|4|S|0|1|0|0|3|1:0|-|0|0");
     source = source.replace("P|3|E|1|0|0|0|2|-|-|0|0", "P|3|E|1|0|0|0|1|-|-|0|0");
     invalid(analyze_manifest(&source));
 }
