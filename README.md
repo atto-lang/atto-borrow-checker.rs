@@ -1,6 +1,10 @@
 # AttoLang canonical borrow checker (Rust)
 
-This repository hosts the **shared ownership verification core** for AttoLang. The language contract is canonical, but the fast compiler implementation remains local to each backend: Java/GraalVM, .NET/C#, LLVM/C++, Wasm, and Cranelift/Rust. Forge and the remaining oreslang-source.* compilers are additional conformance targets.
+This repository hosts the **shared ownership verification core** for AttoLang. The language contract is canonical, but the fast compiler implementation remains local to each backend: Java/GraalVM, .NET/C#, LLVM/C++, Wasm, and Cranelift/Rust. Forge and other `atto-source.*` backends are additional conformance targets.
+
+## Canonical naming and specification
+
+[atto-borrow-checker.rs](https://github.com/atto-lang/atto-borrow-checker.rs) is the maintained AttoLang repository. Use `.atto` source, `atto-*` repository names, and [atto-spec](https://github.com/atto-lang/atto-spec) for current language rules (ownership, borrowing, effects, actors, and syntax). Distinguish proposed and parser-only features from independently executed compiler support in [atto-platform-conformance](https://github.com/atto-lang/atto-platform-conformance). Naming migration does not by itself rename implementation artifacts, guarantee backend compatibility or certify guest execution.
 
 ## Hybrid compiler architecture
 
@@ -45,4 +49,4 @@ V0 now also distinguishes actor-owned mailbox moves and Copy+Send snapshots from
 
 `mir_v1::verify_mir_with_shadow_v0` validates the full operation inventory and input budgets before canonical verification, and publishes observations only after the entire CFG succeeds. Native compiler adapters remain responsible for independently deriving the complete typed inventory.
 
-Related work: [AttoLang shared conformance](https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/pull/646) and [broader Rust static analysis](https://github.com/ores-truffle-oreslang/oreslang-static-analysis.rs).
+Related work: [AttoLang platform conformance](https://github.com/atto-lang/atto-platform-conformance) and [Rust static analysis](https://github.com/atto-lang/atto-static-analysis.rs).
