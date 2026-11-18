@@ -4,9 +4,9 @@
 //! Input is not authenticated. Only a SHA-bound, compiler-checked typed-IR
 //! producer plus independent emission/instruction inventory can someday
 //! promote the result. This module MUST NOT authorize production codegen.
-use std::collections::{BTreeMap, BTreeSet};
 use crate::polonius_facts_v1::{Error, Facts, OriginUse, Point, PointId};
 use crate::polonius_ssa_v1::{analyze_ssa, Definition, Input, SsaReport};
+use std::collections::{BTreeMap, BTreeSet};
 
 pub const CONTRACT: &str = "ATTO_LOAN_CFG_V1";
 const MAX_BYTES: usize = 1_048_576;
@@ -35,7 +35,13 @@ pub struct DifferentialReport {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Kind {
-    Issue, Marker, End, Set, Eval, Condition, Return,
+    Issue,
+    Marker,
+    End,
+    Set,
+    Eval,
+    Condition,
+    Return,
 }
 #[derive(Clone, Debug)]
 struct Row {
@@ -46,14 +52,18 @@ struct Row {
     flag: u32,
     via: u32,
     succ: Vec<PointId>,
-    reads: Vec<(u32,u32)>,
+    reads: Vec<(u32, u32)>,
     direct: Vec<u32>,
     trap: bool,
     conditional: bool,
 }
-fn invalid(msg: &'static str) -> BridgeError { BridgeError::Invalid(msg) }
+fn invalid(msg: &'static str) -> BridgeError {
+    BridgeError::Invalid(msg)
+}
 fn number(s: &str) -> Result<u32, BridgeError> {
-    if s.is_empty() || s.len() > 10 || (s.len()>1 && s.starts_with('0'))
+    if s.is_empty()
+        || s.len() > 10
+        || (s.len() > 1 && s.starts_with('0'))
         || !s.bytes().all(|b| b.is_ascii_digit())
     {
         return Err(invalid("E_WIRE_NONCANONICAL_NUMBER"));
@@ -61,28 +71,43 @@ fn number(s: &str) -> Result<u32, BridgeError> {
     s.parse().map_err(|_| invalid("E_WIRE_NUMBER_OVERFLOW"))
 }
 fn bool_num(s: &str) -> Result<bool, BridgeError> {
-    match s { "0" => Ok(false), "1" => Ok(true), _ => Err(invalid("E_WIRE_FLAG")) }
+    match s {
+        "0" => Ok(false),
+        "1" => Ok(true),
+        _ => Err(invalid("E_WIRE_FLAG")),
+    }
 }
 fn numbers(s: &str) -> Result<Vec<u32>, BridgeError> {
-    if s == "-" { return Ok(vec![]); }
+    if s == "-" {
+        return Ok(vec![]);
+    }
     let mut result = Vec::new();
     for item in s.split(',') {
         result.push(number(item)?);
-        if result.len() > MAX_REFS { return Err(invalid("E_WIRE_FACT_BUDGET")); }
+        if result.len() > MAX_REFS {
+            return Err(invalid("E_WIRE_FACT_BUDGET"));
+        }
     }
     Ok(result)
 }
-fn borrowed(s: &str) -> Result<Vec<(u32,u32)>, BridgeError> {
-    if s == "-" { return Ok(vec![]); }
+fn borrowed(s: &str) -> Result<Vec<(u32, u32)>, BridgeError> {
+    if s == "-" {
+        return Ok(vec![]);
+    }
     let mut result = Vec::new();
     for item in s.split(',') {
-        let (loan, owner) = item.split_once(':')
+        let (loan, owner) = item
+            .split_once(':')
             .ok_or_else(|| invalid("E_WIRE_LOAN_READ"))?;
         let loan = number(loan)?;
         let owner = number(owner)?;
-        if loan == 0 { return Err(invalid("E_WIRE_LOAN_ID")); }
-        result.push((loan,owner));
-        if result.len() > MAX_REFS { return Err(invalid("E_WIRE_FACT_BUDGET")); }
+        if loan == 0 {
+            return Err(invalid("E_WIRE_LOAN_ID"));
+        }
+        result.push((loan, owner));
+        if result.len() > MAX_REFS {
+            return Err(invalid("E_WIRE_FACT_BUDGET"));
+        }
     }
     Ok(result)
 }
@@ -111,22 +136,36 @@ fn row(line: &str) -> Result<Row, BridgeError> {
     let direct = numbers(fields[9])?;
     let trap = bool_num(fields[10])?;
     let conditional = bool_num(fields[11])?;
-    if id == 0 || match kind {
-        Kind::Issue | Kind::Marker | Kind::End => loan == 0 || via != 0,
-        Kind::Set => loan != 0 || flag != 0,
-        _ => loan != 0 || owner != 0 || flag != 0 || via != 0,
-    } {
+    if id == 0
+        || match kind {
+            Kind::Issue | Kind::Marker | Kind::End => loan == 0 || via != 0,
+            Kind::Set => loan != 0 || flag != 0,
+            _ => loan != 0 || owner != 0 || flag != 0 || via != 0,
+        }
+    {
         return Err(invalid("E_WIRE_POINT_FIELDS"));
     }
-    if (kind != Kind::Set && kind != Kind::Eval && kind != Kind::Condition
-        && kind != Kind::Return) && (!reads.is_empty() || !direct.is_empty() || trap || conditional)
+    if (kind != Kind::Set && kind != Kind::Eval && kind != Kind::Condition && kind != Kind::Return)
+        && (!reads.is_empty() || !direct.is_empty() || trap || conditional)
     {
         return Err(invalid("E_WIRE_EVENT_HAS_GUEST_EXPR"));
     }
     if kind == Kind::Return && !succ.is_empty() {
         return Err(invalid("E_WIRE_RETURN_EDGE"));
     }
-    Ok(Row {id,kind,loan,owner,flag,via,succ,reads,direct,trap,conditional})
+    Ok(Row {
+        id,
+        kind,
+        loan,
+        owner,
+        flag,
+        via,
+        succ,
+        reads,
+        direct,
+        trap,
+        conditional,
+    })
 }
 fn one_function(name: String, entry: u32, rows: Vec<Row>) -> Result<FunctionReport, BridgeError> {
     let count = rows.len();
@@ -134,7 +173,7 @@ fn one_function(name: String, entry: u32, rows: Vec<Row>) -> Result<FunctionRepo
         return Err(invalid("E_WIRE_FUNCTION_RANGE"));
     }
     let mut ids = BTreeSet::new();
-    let mut incoming = vec![0usize; count+1];
+    let mut incoming = vec![0usize; count + 1];
     let mut edges = 0usize;
     for r in &rows {
         if r.id == 0 || r.id as usize > count || !ids.insert(r.id) {
@@ -147,21 +186,25 @@ fn one_function(name: String, entry: u32, rows: Vec<Row>) -> Result<FunctionRepo
             }
             incoming[id as usize] += 1;
             edges += 1;
-            if edges > MAX_EDGES { return Err(invalid("E_WIRE_CFG_BUDGET")); }
+            if edges > MAX_EDGES {
+                return Err(invalid("E_WIRE_CFG_BUDGET"));
+            }
         }
     }
-    if ids.len()!=count || incoming[entry as usize] != 0 {
+    if ids.len() != count || incoming[entry as usize] != 0 {
         return Err(invalid("E_WIRE_CFG_ENTRY_OR_GAPS"));
     }
-    let mut owners = BTreeMap::<u32,(u32,bool)>::new();
+    let mut owners = BTreeMap::<u32, (u32, bool)>::new();
     for r in &rows {
         if r.kind == Kind::Issue {
-            if owners.insert(r.loan,(r.owner,r.flag==1)).is_some() {
+            if owners.insert(r.loan, (r.owner, r.flag == 1)).is_some() {
                 return Err(invalid("E_WIRE_DUPLICATE_LOAN"));
             }
         }
     }
-    if owners.len() > MAX_LOANS { return Err(invalid("E_WIRE_LOAN_BUDGET")); }
+    if owners.len() > MAX_LOANS {
+        return Err(invalid("E_WIRE_LOAN_BUDGET"));
+    }
     let mut points = Vec::new();
     let mut uses = Vec::new();
     let mut definitions = Vec::new();
@@ -173,66 +216,102 @@ fn one_function(name: String, entry: u32, rows: Vec<Row>) -> Result<FunctionRepo
         let mut invalidate = Vec::new();
         match r.kind {
             Kind::Issue => {
-                issue.push((r.loan,r.loan));
-                definitions.push(Definition {point:r.id,origin:r.loan});
+                issue.push((r.loan, r.loan));
+                definitions.push(Definition {
+                    point: r.id,
+                    origin: r.loan,
+                });
             }
             Kind::End => {
-                if owners.get(&r.loan).is_none_or(|(owner,_)| *owner!=r.owner) {
+                if owners
+                    .get(&r.loan)
+                    .is_none_or(|(owner, _)| *owner != r.owner)
+                {
                     return Err(invalid("E_WIRE_END_OWNER"));
                 }
                 kill.push(r.loan);
             }
             Kind::Marker => {
-                if owners.get(&r.loan).is_none_or(|(owner,ex)| *owner!=r.owner || (r.flag==1 && !ex)) {
+                if owners
+                    .get(&r.loan)
+                    .is_none_or(|(owner, ex)| *owner != r.owner || (r.flag == 1 && !ex))
+                {
                     return Err(invalid("E_WIRE_MARKER_OWNER"));
                 }
             }
             Kind::Set => {
-                if r.via != 0 && owners.get(&r.via).is_none_or(|(owner,ex)| *owner!=r.owner || !ex) {
+                if r.via != 0
+                    && owners
+                        .get(&r.via)
+                        .is_none_or(|(owner, ex)| *owner != r.owner || !ex)
+                {
                     return Err(invalid("E_WIRE_WRITE_THROUGH"));
                 }
-                invalidate.extend(owners.iter().filter_map(|(&loan,&(owner,_))| {
-                    (owner==r.owner && loan!=r.via).then_some(loan)
+                invalidate.extend(owners.iter().filter_map(|(&loan, &(owner, _))| {
+                    (owner == r.owner && loan != r.via).then_some(loan)
                 }));
             }
             Kind::Eval | Kind::Condition | Kind::Return => {}
         }
-        for &(loan,owner) in &r.reads {
-            if owners.get(&loan).is_none_or(|(issued_owner,_)| *issued_owner!=owner) {
+        for &(loan, owner) in &r.reads {
+            if owners
+                .get(&loan)
+                .is_none_or(|(issued_owner, _)| *issued_owner != owner)
+            {
                 return Err(invalid("E_WIRE_TYPED_LOAN_USE_OWNER"));
             }
-            borrowed_use_points.push((r.id,loan));
+            borrowed_use_points.push((r.id, loan));
         }
         for &owner in &r.direct {
-            invalidate.extend(owners.iter().filter_map(|(&loan,&(issued_owner,ex))| {
-                (ex && issued_owner==owner).then_some(loan)
+            invalidate.extend(owners.iter().filter_map(|(&loan, &(issued_owner, ex))| {
+                (ex && issued_owner == owner).then_some(loan)
             }));
         }
         invalidate.sort_unstable();
         invalidate.dedup();
         let mut seen = BTreeSet::new();
-        for &(loan,_) in &r.reads {
+        for &(loan, _) in &r.reads {
             if seen.insert(loan) {
-                uses.push(OriginUse {point:r.id, origin:loan});
+                uses.push(OriginUse {
+                    point: r.id,
+                    origin: loan,
+                });
             }
         }
         fact_count = fact_count.saturating_add(
-            r.succ.len()+r.reads.len()+r.direct.len()+issue.len()+kill.len()+invalidate.len()
+            r.succ.len()
+                + r.reads.len()
+                + r.direct.len()
+                + issue.len()
+                + kill.len()
+                + invalidate.len(),
         );
-        if fact_count > MAX_REFS { return Err(invalid("E_WIRE_FACT_BUDGET")); }
+        if fact_count > MAX_REFS {
+            return Err(invalid("E_WIRE_FACT_BUDGET"));
+        }
         points.push(Point {
-            id:r.id,successors:r.succ.clone(),live_origins:vec![],
-            subset:vec![],issue,kill,invalidate,
+            id: r.id,
+            successors: r.succ.clone(),
+            live_origins: vec![],
+            subset: vec![],
+            issue,
+            kill,
+            invalidate,
         });
     }
     let input = Input {
-        template: Facts {entry,points},
-        uses,definitions,phi_inputs:vec![],
+        template: Facts { entry, points },
+        uses,
+        definitions,
+        phi_inputs: vec![],
     };
     let ssa = analyze_ssa(&input).map_err(BridgeError::Ssa)?;
-    for (point,loan) in borrowed_use_points {
-        if !ssa.loan_report.live_loans_on_entry
-            .get(&point).is_some_and(|loans| loans.contains(&loan))
+    for (point, loan) in borrowed_use_points {
+        if !ssa
+            .loan_report
+            .live_loans_on_entry
+            .get(&point)
+            .is_some_and(|loans| loans.contains(&loan))
         {
             return Err(invalid("E_WIRE_BORROWED_LOAD_HAS_NO_LIVE_LOAN"));
         }
@@ -240,14 +319,22 @@ fn one_function(name: String, entry: u32, rows: Vec<Row>) -> Result<FunctionRepo
     // The input contract has no independently attested exception/conditional
     // cleanup. Reject if an inferred live loan enters such a point.
     for r in &rows {
-        if (r.trap || r.conditional) &&
-            ssa.loan_report.live_loans_on_entry.get(&r.id)
+        if (r.trap || r.conditional)
+            && ssa
+                .loan_report
+                .live_loans_on_entry
+                .get(&r.id)
                 .is_some_and(|loans| !loans.is_empty())
         {
             return Err(invalid("E_WIRE_UNPROVEN_EXCEPTION_OR_CONDITIONAL"));
         }
     }
-    Ok(FunctionReport{name,node_count:count,loan_count:owners.len(),ssa})
+    Ok(FunctionReport {
+        name,
+        node_count: count,
+        loan_count: owners.len(),
+        ssa,
+    })
 }
 /// Parse complete compiler-derived typed CFG evidence, then execute the
 /// *actual* separate Rust SSA oracle on every closed function.
@@ -255,41 +342,53 @@ fn one_function(name: String, entry: u32, rows: Vec<Row>) -> Result<FunctionRepo
 /// Returned reports are observations only; omitted source guest effects
 /// cannot be authenticated by parsing this payload.
 pub fn analyze_manifest(text: &str) -> Result<DifferentialReport, BridgeError> {
-    if text.len() > MAX_BYTES || text.bytes().any(|b| b==0 || b==b'\r') {
+    if text.len() > MAX_BYTES || text.bytes().any(|b| b == 0 || b == b'\r') {
         return Err(invalid("E_WIRE_BYTE_BUDGET_OR_CONTROL"));
     }
     let mut lines = text.split_terminator('\n');
-    if lines.next() != Some(CONTRACT) { return Err(invalid("E_WIRE_CONTRACT")); }
+    if lines.next() != Some(CONTRACT) {
+        return Err(invalid("E_WIRE_CONTRACT"));
+    }
     let mut functions = Vec::new();
     let mut names = BTreeSet::new();
     loop {
         let line = lines.next().ok_or_else(|| invalid("E_WIRE_MISSING_END"))?;
         if line == "END" {
-            if lines.next().is_some() {return Err(invalid("E_WIRE_TRAILING_DATA")); }
+            if lines.next().is_some() {
+                return Err(invalid("E_WIRE_TRAILING_DATA"));
+            }
             break;
         }
         let fields: Vec<_> = line.split('|').collect();
-        if fields.len()!=4 || fields[0]!="F" {
+        if fields.len() != 4 || fields[0] != "F" {
             return Err(invalid("E_WIRE_FUNCTION_HEADER"));
         }
-        let name=fields[1];
-        if name.is_empty() || name.len()>128
-            || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b==b'_')
+        let name = fields[1];
+        if name.is_empty()
+            || name.len() > 128
+            || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
             || !names.insert(name.to_string())
         {
             return Err(invalid("E_WIRE_FUNCTION_NAME"));
         }
-        let entry=number(fields[2])?;
-        let count=number(fields[3])? as usize;
-        if count==0 || count>MAX_POINTS || functions.len()>=MAX_FUNCTIONS {
+        let entry = number(fields[2])?;
+        let count = number(fields[3])? as usize;
+        if count == 0 || count > MAX_POINTS || functions.len() >= MAX_FUNCTIONS {
             return Err(invalid("E_WIRE_FUNCTION_BUDGET"));
         }
-        let mut rows=Vec::with_capacity(count);
+        let mut rows = Vec::with_capacity(count);
         for _ in 0..count {
-            rows.push(row(lines.next().ok_or_else(|| invalid("E_WIRE_TRUNCATED_POINT_INVENTORY"))?)?);
+            rows.push(row(lines
+                .next()
+                .ok_or_else(|| invalid("E_WIRE_TRUNCATED_POINT_INVENTORY"))?)?);
         }
-        functions.push(one_function(name.to_string(),entry,rows)?);
+        functions.push(one_function(name.to_string(), entry, rows)?);
     }
-    if functions.is_empty(){return Err(invalid("E_WIRE_NO_FUNCTIONS")); }
-    Ok(DifferentialReport{contract:CONTRACT,functions})
+    if functions.is_empty() {
+        return Err(invalid("E_WIRE_NO_FUNCTIONS"));
+    }
+    Ok(DifferentialReport {
+        contract: CONTRACT,
+        functions,
+    })
 }
