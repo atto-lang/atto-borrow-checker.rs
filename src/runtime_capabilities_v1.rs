@@ -198,17 +198,13 @@ struct FrozenRegion {
     graph: FrozenGraph,
 }
 
-/// A trusted host must mint this from independently authenticated caller
-/// context; it is deliberately impossible to construct from another crate.
+/// An unforgeable scoped read capability minted by the owning host region.
+/// It covers exactly one region and its domain; neither a bare numeric ID nor
+/// an arbitrary weak handle can manufacture access to another region.
 #[derive(Clone, Copy, Debug)]
 pub struct HostDomainPermit {
     domain: u64,
-}
-impl HostDomainPermit {
-    pub(crate) fn trusted(domain: u64) -> Result<Self, CapabilityError> {
-        if domain == 0 { return Err(CapabilityError::InvalidDomain); }
-        Ok(Self { domain })
-    }
+    region_id: u64,
 }
 
 /// The sole authority for retiring a frozen region. Clone is intentionally
@@ -218,6 +214,11 @@ pub struct FrozenOwner {
     region: Arc<FrozenRegion>,
 }
 impl FrozenOwner {
+    /// The only public minting path for a read permit is possession of this
+    /// region's exclusive host owner. The permit is not a guest-visible type.
+    pub fn issue_read_permit(&self) -> HostDomainPermit {
+        HostDomainPermit { domain: self.region.domain, region_id: self.region.id }
+    }
     pub fn share(&self) -> FrozenShared {
         FrozenShared { region: Arc::clone(&self.region) }
     }
@@ -263,7 +264,7 @@ impl FrozenShared {
         permit: &HostDomainPermit,
         access: impl FnOnce(&FrozenGraph) -> R,
     ) -> Result<R, CapabilityError> {
-        if self.region.domain != permit.domain {
+        if self.region.domain != permit.domain || self.region.id != permit.region_id {
             return Err(CapabilityError::WrongDomain);
         }
         let _lease = self.region.leases.read().map_err(|_| CapabilityError::Poisoned)?;
@@ -286,7 +287,7 @@ pub struct FrozenWeak {
 }
 impl FrozenWeak {
     pub fn upgrade(&self, permit: &HostDomainPermit) -> Option<FrozenShared> {
-        if self.domain != permit.domain {
+        if self.domain != permit.domain || self.region_id != permit.region_id {
             return None;
         }
         let strong = self.region.upgrade()?;
