@@ -196,10 +196,8 @@ fn one_function(name: String, entry: u32, rows: Vec<Row>) -> Result<FunctionRepo
     }
     let mut owners = BTreeMap::<u32, (u32, bool)>::new();
     for r in &rows {
-        if r.kind == Kind::Issue {
-            if owners.insert(r.loan, (r.owner, r.flag == 1)).is_some() {
-                return Err(invalid("E_WIRE_DUPLICATE_LOAN"));
-            }
+        if r.kind == Kind::Issue && owners.insert(r.loan, (r.owner, r.flag == 1)).is_some() {
+            return Err(invalid("E_WIRE_DUPLICATE_LOAN"));
         }
     }
     if owners.len() > MAX_LOANS {
