@@ -325,7 +325,13 @@ impl FrozenShared {
         if self.region.domain != permit.domain || self.region.id != permit.region_id {
             return Err(CapabilityError::WrongDomain);
         }
-        let _lease = self.region.leases.read().map_err(|_| CapabilityError::Poisoned)?;
+        // Native scheduler carriers must not park behind an unexpected
+        // competing writer: a busy lease produces an explicit retry signal.
+        let _lease = match self.region.leases.try_read() {
+            Ok(lease) => lease,
+            Err(TryLockError::WouldBlock) => return Err(CapabilityError::Busy),
+            Err(TryLockError::Poisoned(_)) => return Err(CapabilityError::Poisoned),
+        };
         if self.region.retired.load(Ordering::SeqCst) {
             return Err(CapabilityError::Retired);
         }
@@ -352,7 +358,9 @@ impl FrozenWeak {
         if strong.id != self.region_id || strong.domain != permit.domain {
             return None;
         }
-        let _lease = strong.leases.read().ok()?;
+        // Weak upgrade may return None on contention. No strong owner is
+        // returned until the exact identity and retirement checks pass.
+        let _lease = strong.leases.try_read().ok()?;
         if strong.retired.load(Ordering::SeqCst) { return None; }
         drop(_lease);
         // A concurrent retire AFTER this point is valid: it must block or
