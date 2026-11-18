@@ -11,6 +11,9 @@ use std::collections::{BTreeMap, BTreeSet};
 pub mod actor_arena_ref32_v1;
 pub mod actor_state_guard_v1;
 pub mod actor_state_runtime_v1;
+/// Real host-side Arc/Weak, immutable graph, and Pin<Box<T>> safety model.
+/// Native guest admission still requires independently verified compiler IR.
+pub mod runtime_capabilities_v1;
 
 pub type OwnerId = u32;
 pub type LoanId = u32;
