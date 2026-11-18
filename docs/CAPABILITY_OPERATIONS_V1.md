@@ -53,6 +53,18 @@ Pinning does **not** extend a borrow across a suspension: V0 still rejects
 `Suspend` with any live loan until continuation retention, cancellation and
 destructor ordering are proven in a separate profile.
 
+## Real host reference model (not guest compiler certification)
+
+The new src/runtime_capabilities_v1.rs is a separate, concrete Rust safety model. It uses owned graph data, Arc/Weak, atomic retirement flags, scoped RwLock read leases, and Pin<Box<T>> rather than trusting a source-written boolean witness.
+
+- Freeze validates the entire reachable graph iteratively (cycles allowed), rejects external mutable aliases, foreign/dynamic/interior mutable nodes, unknown edges, disconnected components, duplicate IDs, and bounded resource overflows. A failed validation returns its unique owner. The frozen graph exposes only immutable views.
+- A frozen region owner alone issues a read permit bound to the exact domain AND monotonically allocated region ID. Weak::upgrade is atomic and revalidates this identity and logical retirement. A weak handle never keeps allocation storage alive.
+- Retire publishes the retired bit before a nonblocking try_write quiescence probe. Busy means there may still be an in-flight read; after retirement no new reads/upgrades are admitted. Dropping the owner does not block on a reader that might itself drop the owner. Arc defers physical destruction until all strong references leave.
+- StablePinned<T> uses Pin<Box<T>>, exposing only Pin<&T>. Moving a handle to another stack slot or OS thread cannot move the pointee. No generalized AttoLang async pin/borrow rights follow from this model.
+
+Tests in tests/runtime_capabilities_v1.rs cover cyclic graphs, forbidden edges, budgets, stale and wrong-region weak rights, retire/upgrade races, reentrant owner Drop and pinned address stability. These tests are authored, not yet confirmed as executed; current GitHub Actions infrastructure stops before usable logs.
+
+Important: a production backend must authenticate the object graph and domain at source-to-IR lowering, emit compatible runtime ABI operations, independently validate the guest heap and generation, and prove exception/cancellation cleanup. Do not mark cross-backend parity solely on this model.
 ## Test boundaries
 
 - `tests/ownership_capabilities_v1.rs`: consuming freeze, mutable alias
