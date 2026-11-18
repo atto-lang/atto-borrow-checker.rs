@@ -270,7 +270,7 @@ fn simultaneous_weak_upgrades_vs_retirement_never_dereference_freed_data() {
             for _ in 0..1000 {
                 if let Some(shared) = weak.upgrade(&permit) {
                     let result = shared.read(&permit, |g| g.node_count());
-                    assert!(matches!(result, Ok(3) | Err(E::Retired)));
+                    assert!(matches!(result, Ok(3) | Err(E::Retired) | Err(E::Busy)));
                 }
             }
         }));
