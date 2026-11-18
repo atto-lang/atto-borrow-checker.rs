@@ -8,8 +8,8 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, RwLock, Weak};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, RwLock, TryLockError, Weak};
 
 static NEXT_REGION_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -25,6 +25,7 @@ pub enum CapabilityError {
     IdentityExhausted,
     WrongDomain,
     Retired,
+    Busy,
     Poisoned,
 }
 
@@ -153,7 +154,10 @@ impl UniqueGraph {
         Ok(FrozenOwner {
             region: Arc::new(FrozenRegion {
                 id, domain: self.domain,
-                state: RwLock::new(false), // false=open, true=retired
+                retired: AtomicBool::new(false),
+                // Physical read scopes and retirement admission use a lock.
+                // The atomic retirement bit allows nonblocking owner Drop.
+                leases: RwLock::new(()),
                 graph: FrozenGraph { root: self.root, nodes: map },
             }),
         })
@@ -186,9 +190,11 @@ impl FrozenGraph {
 struct FrozenRegion {
     id: u64,
     domain: u64,
-    // Read closures and retirement serialize here. An upgrade may succeed
-    // immediately before retirement, but subsequent reads fail closed.
-    state: RwLock<bool>,
+    // Retirement is logically immediate even when a physical read is active.
+    // A reader may finish if it acquired a lease before retirement; callers
+    // cannot start new reads after the atomic retirement linearization point.
+    retired: AtomicBool,
+    leases: RwLock<()>,
     graph: FrozenGraph,
 }
 
@@ -219,17 +225,22 @@ impl FrozenOwner {
         self.share().downgrade()
     }
     pub fn retire(&self) -> Result<(), CapabilityError> {
-        let mut guard = self.region.state.write().map_err(|_| CapabilityError::Poisoned)?;
-        *guard = true;
-        Ok(())
+        // No scheduler-thread parking: retirement takes effect before trying
+        // to establish physical quiescence. If a callback is in flight, the
+        // caller gets Busy and can retry after that callback exits.
+        self.region.retired.store(true, Ordering::SeqCst);
+        match self.region.leases.try_write() {
+            Ok(_lease) => Ok(()),
+            Err(TryLockError::WouldBlock) => Err(CapabilityError::Busy),
+            Err(TryLockError::Poisoned(_)) => Err(CapabilityError::Poisoned),
+        }
     }
 }
 impl Drop for FrozenOwner {
     fn drop(&mut self) {
-        // Poisoned locks already fail subsequent reads/upgrades; never reopen.
-        if let Ok(mut state) = self.region.state.write() {
-            *state = true;
-        }
+        // Drop must never wait on a read callback (including a callback
+        // that itself drops the owner). Arc keeps physical storage alive.
+        self.region.retired.store(true, Ordering::SeqCst);
     }
 }
 
@@ -255,8 +266,8 @@ impl FrozenShared {
         if self.region.domain != permit.domain {
             return Err(CapabilityError::WrongDomain);
         }
-        let state = self.region.state.read().map_err(|_| CapabilityError::Poisoned)?;
-        if *state {
+        let _lease = self.region.leases.read().map_err(|_| CapabilityError::Poisoned)?;
+        if self.region.retired.load(Ordering::SeqCst) {
             return Err(CapabilityError::Retired);
         }
         // Hold a physical read lease for the entire callback. No raw pointer
@@ -282,9 +293,9 @@ impl FrozenWeak {
         if strong.id != self.region_id || strong.domain != permit.domain {
             return None;
         }
-        let state = strong.state.read().ok()?;
-        if *state { return None; }
-        drop(state);
+        let _lease = strong.leases.read().ok()?;
+        if strong.retired.load(Ordering::SeqCst) { return None; }
+        drop(_lease);
         // A concurrent retire AFTER this point is valid: it must block or
         // invalidate later read() calls. Success never grants mutable access.
         Some(FrozenShared { region: strong })
