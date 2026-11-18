@@ -81,7 +81,7 @@ impl ActorArenaRef32 {
         // Preserve unique identity even if generations/offsets match across
         // distinct actor arenas. Do not wrap or reuse a trusted namespace ID.
         let arena_id = NEXT_ARENA_ID
-            .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
             .map_err(|_| Ref32Error::ArenaIdExhausted)?;
         Ok(Self {
             arena_id,
