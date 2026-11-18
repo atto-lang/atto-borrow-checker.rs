@@ -40,6 +40,67 @@ fn freezes_complete_cyclic_graph_and_exposes_only_immutable_views() {
 }
 
 #[test]
+fn deep_copy_independently_clones_nested_payloads_and_retains_cycle_edges() {
+    let mut source = cycle(17);
+    let mut copy = source.deep_copy(FreezeLimits::default()).unwrap();
+    assert_eq!(source.children(1), Some(&[2, 3][..]));
+    assert_eq!(copy.children(1), Some(&[2, 3][..]));
+    assert_eq!(copy.children(3), Some(&[1][..])); // cycle remains internal
+    assert_eq!(source.payload(2), Some(&[2][..]));
+    assert_eq!(copy.payload(2), Some(&[2][..]));
+    // Both buffers contain identical bytes, but not the same heap memory.
+    assert_ne!(source.payload(2).unwrap().as_ptr(), copy.payload(2).unwrap().as_ptr());
+    copy.replace_payload(2, vec![88, 89]).unwrap();
+    assert_eq!(source.payload(2), Some(&[2][..]));
+    assert_eq!(copy.payload(2), Some(&[88, 89][..]));
+    source.replace_payload(3, vec![12]).unwrap();
+    assert_eq!(copy.payload(3), Some(&[3][..]));
+    // Both owners remain independently valid for subsequent freezing.
+    freeze(source);
+    freeze(copy);
+}
+
+#[test]
+fn deep_copy_preserves_duplicate_internal_references_without_external_aliases() {
+    // Two edges in the copy must still refer to ONE cloned local node,
+    // not accidentally produce two disjoint children or alias the source.
+    let original = UniqueGraph::new(19, 1, vec![
+        node(1, &[2, 2]), node(2, &[1]),
+    ]).unwrap();
+    let mut copy = original.deep_copy(FreezeLimits::default()).unwrap();
+    assert_eq!(copy.children(1), Some(&[2, 2][..]));
+    copy.replace_payload(2, vec![90]).unwrap();
+    assert_eq!(copy.payload(2), Some(&[90][..]));
+    assert_eq!(original.payload(2), Some(&[2][..]));
+}
+
+#[test]
+fn deep_copy_rejects_external_mutable_edges_before_copying() {
+    for kind in [
+        NodeKind::ExternalMutableAlias, NodeKind::InteriorMutable,
+        NodeKind::ForeignPointer, NodeKind::UnverifiedDynamic,
+    ] {
+        let mut external = node(2, &[]);
+        external.kind = kind;
+        let source = UniqueGraph::new(17, 1, vec![node(1, &[2]), external]).unwrap();
+        assert_eq!(source.deep_copy(FreezeLimits::default()).unwrap_err(),
+            E::UnfreezableEdge);
+        // The source remains owned, not consumed by a failed copy.
+        assert_eq!(source.payload(1), Some(&[1][..]));
+    }
+}
+
+#[test]
+fn deep_copy_preflights_graph_limits_and_missing_edges() {
+    let source = cycle(17);
+    assert_eq!(source.deep_copy(FreezeLimits {
+        max_nodes: 100, max_edges: 1, max_bytes: 4096,
+    }).unwrap_err(), E::BudgetExceeded);
+    let missing = UniqueGraph::new(17, 1, vec![node(1, &[999])]).unwrap();
+    assert_eq!(missing.deep_copy(FreezeLimits::default()).unwrap_err(), E::UnknownEdge);
+}
+
+#[test]
 fn freeze_failure_returns_original_exclusive_graph() {
     let mut invalid = node(1, &[2]);
     invalid.kind = NodeKind::ExternalMutableAlias;
