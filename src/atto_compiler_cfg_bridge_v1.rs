@@ -5,9 +5,7 @@
 //! producer plus independent emission/instruction inventory can someday
 //! promote the result. This module MUST NOT authorize production codegen.
 use std::collections::{BTreeMap, BTreeSet};
-use crate::polonius_facts_v1::{
-    Code, Error, Facts, OriginUse, Point, PointId,
-};
+use crate::polonius_facts_v1::{Error, Facts, OriginUse, Point, PointId};
 use crate::polonius_ssa_v1::{analyze_ssa, Definition, Input, SsaReport};
 
 pub const CONTRACT: &str = "ATTO_LOAN_CFG_V1";
