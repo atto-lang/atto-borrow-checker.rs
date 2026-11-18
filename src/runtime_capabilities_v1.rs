@@ -22,6 +22,7 @@ pub enum CapabilityError {
     DisconnectedGraph,
     UnfreezableEdge,
     BudgetExceeded,
+    AllocationFailed,
     IdentityExhausted,
     WrongDomain,
     Retired,
@@ -80,6 +81,63 @@ impl UniqueGraph {
             return Err(CapabilityError::InvalidDomain);
         }
         Ok(Self { domain, root, nodes })
+    }
+
+    /// Perform a verified, truly independent deep copy without consuming the
+    /// source. This is the host-model counterpart to copy!!, NOT the ordinary
+    /// Copy trait / a shallow clone of a heap handle.
+    ///
+    /// All nodes, payload buffers and adjacency vectors receive distinct
+    /// allocations. Edges remain local node IDs, so cycles and sharing *within*
+    /// a graph are preserved without creating an alias to the source graph.
+    /// The validation gate rejects unowned external mutable references and
+    /// charges maximum nodes/edges/payload bytes before allocation.
+    pub fn deep_copy(&self, limits: FreezeLimits) -> Result<Self, CapabilityError> {
+        self.validate(limits)?;
+        let mut nodes = Vec::new();
+        nodes.try_reserve_exact(self.nodes.len())
+            .map_err(|_| CapabilityError::AllocationFailed)?;
+        for node in &self.nodes {
+            let mut payload = Vec::new();
+            payload.try_reserve_exact(node.payload.len())
+                .map_err(|_| CapabilityError::AllocationFailed)?;
+            payload.extend_from_slice(&node.payload);
+            let mut children = Vec::new();
+            children.try_reserve_exact(node.children.len())
+                .map_err(|_| CapabilityError::AllocationFailed)?;
+            children.extend_from_slice(&node.children);
+            nodes.push(GraphNode {
+                id: node.id,
+                kind: NodeKind::Plain, // checked by validate()
+                payload,
+                children,
+            });
+        }
+        Ok(Self { domain: self.domain, root: self.root, nodes })
+    }
+
+    /// Exposes a read-only payload without a raw pointer. A source compiler
+    /// must still enforce its language-specific borrow restrictions.
+    pub fn payload(&self, node_id: u32) -> Option<&[u8]> {
+        self.nodes.iter().find(|node| node.id == node_id)
+            .map(|node| node.payload.as_slice())
+    }
+
+    /// Mutate only this unique owner. Mutation of its deep copy cannot
+    /// silently modify another graph, because copy!! duplicates all vectors.
+    pub fn replace_payload(&mut self, node_id: u32, payload: Vec<u8>)
+        -> Result<(), CapabilityError>
+    {
+        let node = self.nodes.iter_mut().find(|node| node.id == node_id)
+            .ok_or(CapabilityError::InvalidNode)?;
+        node.payload = payload;
+        Ok(())
+    }
+
+    /// Read topology by local ID for differential conformance tests.
+    pub fn children(&self, node_id: u32) -> Option<&[u32]> {
+        self.nodes.iter().find(|node| node.id == node_id)
+            .map(|node| node.children.as_slice())
     }
 
     fn validate(&self, limits: FreezeLimits) -> Result<(), CapabilityError> {
