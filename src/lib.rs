@@ -559,6 +559,12 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
                 .live
                 .get(&owner)
                 .ok_or_else(|| bad("E_USE_AFTER_MOVE_OR_DROP"))?;
+            if source.pinned {
+                // A task frame may be relocated on cancellation/reschedule.
+                // Pinning a pointee is not a proof that this backend retains
+                // its allocation address across the task boundary.
+                return Err(bad("E_PIN_BOUNDARY_TRANSFER"));
+            }
             if !source.traits.is_send {
                 return Err(bad("E_TASK_CAPTURE_PROOF"));
             }
@@ -584,6 +590,11 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
                 .live
                 .get(&owner)
                 .ok_or_else(|| bad("E_USE_AFTER_MOVE_OR_DROP"))?;
+            if source.pinned {
+                // Mailbox admission may serialize or copy into a recipient
+                // arena. Without pinned-region handoff proof it MUST reject.
+                return Err(bad("E_PIN_BOUNDARY_TRANSFER"));
+            }
             if !source.traits.is_send {
                 return Err(bad("E_ACTOR_SEND_PROOF_REQUIRED"));
             }
@@ -617,6 +628,12 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
                 .live
                 .get(&owner)
                 .ok_or_else(|| bad("E_USE_AFTER_MOVE_OR_DROP"))?;
+            if source.pinned {
+                // Moving an owner HANDLE within one address-stable arena is
+                // permitted; transferring its storage to a different arena
+                // is not. No backend handoff witness exists in this profile.
+                return Err(bad("E_PIN_BOUNDARY_TRANSFER"));
+            }
             if !source.traits.is_send {
                 return Err(bad("E_ACTOR_SEND_PROOF_REQUIRED"));
             }
@@ -647,6 +664,11 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
                 .live
                 .get(&owner)
                 .ok_or_else(|| bad("E_USE_AFTER_MOVE_OR_DROP"))?;
+            if source.pinned {
+                // Publishing a region may change allocator/arena ownership.
+                // A typed stable-address transfer effect is future work.
+                return Err(bad("E_PIN_BOUNDARY_TRANSFER"));
+            }
             if !source.traits.is_send || !sync_proven {
                 return Err(bad("E_SHARED_FROZEN_PROOF_REQUIRED"));
             }
