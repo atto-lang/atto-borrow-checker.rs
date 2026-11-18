@@ -59,7 +59,7 @@ fn a_weak_event_cannot_masquerade_as_actor_mail_admission() {
 fn an_omitted_pinning_instruction_is_detected_by_inventory() {
     let mut mir = sample();
     mir.blocks[0].instructions.remove(2);
-    assert_eq!(verify_mir(&mir), Err(MirError::Invalid("E_MIR_INVENTORY_MISMATCH")));
+    assert_eq!(verify_mir(&mir), Err(MirError::Invalid("E_MIR_INCOMPLETE_INVENTORY")));
 }
 
 #[test]
