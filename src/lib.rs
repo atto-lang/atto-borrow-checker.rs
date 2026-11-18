@@ -81,6 +81,10 @@ pub enum Op {
         from: OwnerId,
         into: OwnerId,
     },
+    /// Independent deep object-graph clone: unlike Copy, this does not
+    /// require the type to be trivially Copy, but requires a separate graph
+    /// completeness, alias and allocator witness from trusted lowering.
+    DeepCopy { from: OwnerId, into: OwnerId, graph_proven: bool },
     Drop {
         owner: OwnerId,
     },
@@ -204,6 +208,7 @@ fn shadow_kind(op: &Op) -> (&'static str, Option<OwnerId>) {
         Op::EndBorrow { .. } => ("END_BORROW", None),
         Op::Move { from, .. } => ("MOVE", Some(from)),
         Op::Copy { from, .. } => ("COPY", Some(from)),
+        Op::DeepCopy { from, .. } => ("DEEP_COPY", Some(from)),
         Op::Drop { owner } => ("DROP", Some(owner)),
         Op::Freeze { from, .. } => ("FREEZE", Some(from)),
         Op::PinStorage { owner, .. } => ("PIN_STORAGE", Some(owner)),
@@ -306,7 +311,7 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
         | Op::ActorSendCopy { owner }
         | Op::PublishFrozen { owner, .. }
         | Op::PromoteGuarded { owner, .. } => Some(owner),
-        Op::Move { from, .. } | Op::Copy { from, .. } | Op::Freeze { from, .. } => Some(from),
+        Op::Move { from, .. } | Op::Copy { from, .. } | Op::DeepCopy { from, .. } | Op::Freeze { from, .. } => Some(from),
         _ => None,
     };
     if let Some(owner) = accessed_owner {
@@ -430,6 +435,29 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
                     pinned: false,
                 },
             );
+        }
+        Op::DeepCopy { from, into, graph_proven } => {
+            let source = state.live.get(&from)
+                .ok_or_else(|| bad("E_USE_AFTER_MOVE_OR_DROP"))?;
+            if !graph_proven {
+                return Err(bad("E_DEEP_COPY_PROOF_REQUIRED"));
+            }
+            if has_mut_loan(state, from) {
+                return Err(bad("E_BORROW_CONFLICT"));
+            }
+            if !fresh_destination(state, into) {
+                return Err(bad("E_OWNER_ID_REUSED_OR_BUDGET"));
+            }
+            // The source's logical identity and lifetime are unchanged.
+            // Every reached mutable allocation must be cloned independently
+            // by the backend; this model does not perform that allocation.
+            let traits = source.traits;
+            let frozen = source.frozen;
+            let acquisition = next_acquisition(state);
+            state.ever_owned.insert(into);
+            state.live.insert(into, Owner {
+                traits, acquisition, frozen, pinned: false,
+            });
         }
         Op::Drop { owner } => {
             if !is_live(state, owner) {
@@ -715,7 +743,7 @@ fn verify_internal(
         for (index, op) in block.operations.iter().enumerate() {
             let owner = match op {
                 Op::Init { owner, .. } => Some(*owner),
-                Op::Move { into, .. } | Op::Copy { into, .. } | Op::Freeze { into, .. } => Some(*into),
+                Op::Move { into, .. } | Op::Copy { into, .. } | Op::DeepCopy { into, .. } | Op::Freeze { into, .. } => Some(*into),
                 _ => None,
             };
             if let Some(id) = owner {
