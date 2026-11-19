@@ -11,12 +11,12 @@ use std::collections::{BTreeMap, BTreeSet};
 pub mod actor_arena_ref32_v1;
 pub mod actor_state_guard_v1;
 pub mod actor_state_runtime_v1;
-/// Real host-side Arc/Weak, immutable graph, and Pin<Box<T>> safety model.
-/// Native guest admission still requires independently verified compiler IR.
-pub mod runtime_capabilities_v1;
 /// Named lt! a binders and inferred lexical argument-borrow region checks.
 /// Separate V1 type model; not a replacement for full MIR lifetime lowering.
 pub mod lifetime_v1;
+/// Real host-side Arc/Weak, immutable graph, and Pin<Box<T>> safety model.
+/// Native guest admission still requires independently verified compiler IR.
+pub mod runtime_capabilities_v1;
 
 pub type OwnerId = u32;
 pub type LoanId = u32;
@@ -87,21 +87,41 @@ pub enum Op {
     /// Independent deep object-graph clone: unlike Copy, this does not
     /// require the type to be trivially Copy, but requires a separate graph
     /// completeness, alias and allocator witness from trusted lowering.
-    DeepCopy { from: OwnerId, into: OwnerId, graph_proven: bool },
+    DeepCopy {
+        from: OwnerId,
+        into: OwnerId,
+        graph_proven: bool,
+    },
     Drop {
         owner: OwnerId,
     },
     /// Consume an exclusive owner into a deeply immutable, distinct owner.
     /// The compiler must independently validate the entire reachable graph.
-    Freeze { from: OwnerId, into: OwnerId, deep_proven: bool },
+    Freeze {
+        from: OwnerId,
+        into: OwnerId,
+        deep_proven: bool,
+    },
     /// Pin pointee storage, NOT the owner handle or its CPU thread.
-    PinStorage { owner: OwnerId, stable_address_proven: bool },
+    PinStorage {
+        owner: OwnerId,
+        stable_address_proven: bool,
+    },
     /// Relocation is distinct from moving a pointer-like owning handle.
-    RelocateStorage { owner: OwnerId },
+    RelocateStorage {
+        owner: OwnerId,
+    },
     /// Make a non-owning generation-fenced handle to an already frozen region.
-    CreateWeak { region: SharedRegionId, weak: WeakId, generation_fenced: bool },
+    CreateWeak {
+        region: SharedRegionId,
+        weak: WeakId,
+        generation_fenced: bool,
+    },
     /// Nullable observation only: does not manufacture a strong owner.
-    ProbeWeak { weak: WeakId, generation_fenced: bool },
+    ProbeWeak {
+        weak: WeakId,
+        generation_fenced: bool,
+    },
     TaskCaptureCopy {
         owner: OwnerId,
     },
@@ -314,7 +334,10 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
         | Op::ActorSendCopy { owner }
         | Op::PublishFrozen { owner, .. }
         | Op::PromoteGuarded { owner, .. } => Some(owner),
-        Op::Move { from, .. } | Op::Copy { from, .. } | Op::DeepCopy { from, .. } | Op::Freeze { from, .. } => Some(from),
+        Op::Move { from, .. }
+        | Op::Copy { from, .. }
+        | Op::DeepCopy { from, .. }
+        | Op::Freeze { from, .. } => Some(from),
         _ => None,
     };
     if let Some(owner) = accessed_owner {
@@ -439,8 +462,14 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
                 },
             );
         }
-        Op::DeepCopy { from, into, graph_proven } => {
-            let source = state.live.get(&from)
+        Op::DeepCopy {
+            from,
+            into,
+            graph_proven,
+        } => {
+            let source = state
+                .live
+                .get(&from)
                 .ok_or_else(|| bad("E_USE_AFTER_MOVE_OR_DROP"))?;
             if !graph_proven {
                 return Err(bad("E_DEEP_COPY_PROOF_REQUIRED"));
@@ -458,9 +487,15 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
             let frozen = source.frozen;
             let acquisition = next_acquisition(state);
             state.ever_owned.insert(into);
-            state.live.insert(into, Owner {
-                traits, acquisition, frozen, pinned: false,
-            });
+            state.live.insert(
+                into,
+                Owner {
+                    traits,
+                    acquisition,
+                    frozen,
+                    pinned: false,
+                },
+            );
         }
         Op::Drop { owner } => {
             if !is_live(state, owner) {
@@ -471,7 +506,11 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
             }
             state.live.remove(&owner);
         }
-        Op::Freeze { from, into, deep_proven } => {
+        Op::Freeze {
+            from,
+            into,
+            deep_proven,
+        } => {
             if !is_live(state, from) {
                 return Err(bad("E_USE_AFTER_MOVE_OR_DROP"));
             }
@@ -493,7 +532,10 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
             state.ever_owned.insert(into);
             state.live.insert(into, frozen);
         }
-        Op::PinStorage { owner, stable_address_proven } => {
+        Op::PinStorage {
+            owner,
+            stable_address_proven,
+        } => {
             let Some(value) = state.live.get(&owner) else {
                 return Err(bad("E_USE_AFTER_MOVE_OR_DROP"));
             };
@@ -519,7 +561,11 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
                 return Err(bad("E_BORROW_CONFLICT"));
             }
         }
-        Op::CreateWeak { region, weak, generation_fenced } => {
+        Op::CreateWeak {
+            region,
+            weak,
+            generation_fenced,
+        } => {
             if !generation_fenced {
                 return Err(bad("E_WEAK_GENERATION_PROOF_REQUIRED"));
             }
@@ -532,7 +578,10 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
             state.ever_weak.insert(weak);
             state.weak_regions.insert(weak, region);
         }
-        Op::ProbeWeak { weak, generation_fenced } => {
+        Op::ProbeWeak {
+            weak,
+            generation_fenced,
+        } => {
             if !generation_fenced {
                 return Err(bad("E_WEAK_GENERATION_PROOF_REQUIRED"));
             }
@@ -768,7 +817,10 @@ fn verify_internal(
         for (index, op) in block.operations.iter().enumerate() {
             let owner = match op {
                 Op::Init { owner, .. } => Some(*owner),
-                Op::Move { into, .. } | Op::Copy { into, .. } | Op::DeepCopy { into, .. } | Op::Freeze { into, .. } => Some(*into),
+                Op::Move { into, .. }
+                | Op::Copy { into, .. }
+                | Op::DeepCopy { into, .. }
+                | Op::Freeze { into, .. } => Some(*into),
                 _ => None,
             };
             if let Some(id) = owner {
