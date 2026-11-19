@@ -28,7 +28,10 @@ fn named_lifetime_may_borrow_outer_owner_with_shared_loans() {
     c.end_borrow(10).unwrap();
     c.end_borrow(11).unwrap();
     c.leave_scope().unwrap();
-    assert_eq!(c.borrow_named(1, 13, Shared, "a"), Err(Error::UnknownBinder));
+    assert_eq!(
+        c.borrow_named(1, 13, Shared, "a"),
+        Err(Error::UnknownBinder)
+    );
 }
 
 #[test]
@@ -37,7 +40,10 @@ fn lifetime_declared_outside_owner_cannot_outlive_inner_storage() {
     c.bind("outer").unwrap();
     c.enter_scope().unwrap();
     c.own(2).unwrap();
-    assert_eq!(c.borrow_named(2, 5, Shared, "outer"), Err(Error::OutlivesOwner));
+    assert_eq!(
+        c.borrow_named(2, 5, Shared, "outer"),
+        Err(Error::OutlivesOwner)
+    );
     // A named lifetime declared alongside the owned storage is valid.
     c.bind("inner").unwrap();
     c.borrow_named(2, 5, Shared, "inner").unwrap();
@@ -113,7 +119,10 @@ fn loan_and_owner_ids_cannot_be_reused_after_scope_exit_or_drop() {
 fn unseen_lifetime_owner_and_loan_are_diagnosed() {
     let mut c = Lifetimes::new();
     c.own(1).unwrap();
-    assert_eq!(c.borrow_named(1, 2, Shared, "missing"), Err(Error::UnknownBinder));
+    assert_eq!(
+        c.borrow_named(1, 2, Shared, "missing"),
+        Err(Error::UnknownBinder)
+    );
     assert_eq!(c.borrow_implicit(9, 2, Shared), Err(Error::UnknownOwner));
     assert_eq!(c.end_borrow(2), Err(Error::UnknownLoan));
     assert_eq!(c.return_loan(2), Err(Error::UnknownLoan));
