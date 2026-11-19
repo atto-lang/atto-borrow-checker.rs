@@ -53,6 +53,30 @@ Pinning does **not** extend a borrow across a suspension: V0 still rejects
 `Suspend` with any live loan until continuation retention, cancellation and
 destructor ordering are proven in a separate profile.
 
+## Loan origins and explicit authority operations
+
+The caller's ordinary nonprimitive argument `reader(owner)` is a **scoped
+readonly borrow**, equivalent to `reader(borrow! owner)` under the proposed
+borrow-by-default language profile. A canonical verifier must receive the
+same typed loan issue/use/end facts for either source spelling; it must not
+infer `take!`, `share!`, `copy!`, `copy!!`, `pin!` or `drop!` from a
+mere argument evaluation. `writer(mut owner)` and
+`writer(borrow! mut owner)` denote the same exclusive mutable loan when
+that profile is supported.
+
+A consuming `drop! owner;` requires no live loans and authenticated resource
+cleanup. A consuming `pin! take! owner` must preserve the pointee's address,
+not grant a call loan extra lifetime or permit transfer to a different actor
+arena. A deep `copy!!` of a pinned graph allocates independent, *unpinned*
+storage; the source retains its pin. Shared `share!` storage must be
+transitively frozen or protected by an independently checked synchronization
+guard, never created by borrowing alone.
+
+**Verification boundary:** these are source-to-typed-MIR obligations; the
+restricted V0 model cannot itself prove codegen, destructors, worker handoffs
+or native graph cloning. Missing authenticated events must reject, not produce
+a permissive witness.
+
 ## Real host reference model (not guest compiler certification)
 
 The new src/runtime_capabilities_v1.rs is a separate, concrete Rust safety model. It uses owned graph data, Arc/Weak, atomic retirement flags, scoped RwLock read leases, and Pin<Box<T>> rather than trusting a source-written boolean witness.
