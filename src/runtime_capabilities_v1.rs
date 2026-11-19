@@ -197,11 +197,23 @@ impl UniqueGraph {
         if let Err(error) = self.validate(limits) {
             return Err((error, self));
         }
-        let id = match NEXT_REGION_ID.fetch_update(
-            Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1),
-        ) {
-            Ok(id) => id,
-            Err(_) => return Err((CapabilityError::IdentityExhausted, self)),
+        // Preserve strict monotonicity without the renamed AtomicU64
+        // fetch_update API. A failed CAS must retry from the observed value,
+        // never wrap an exhausted region identity back to an older permit.
+        let mut candidate = NEXT_REGION_ID.load(Ordering::Relaxed);
+        let id = loop {
+            let Some(next) = candidate.checked_add(1) else {
+                return Err((CapabilityError::IdentityExhausted, self));
+            };
+            match NEXT_REGION_ID.compare_exchange_weak(
+                candidate,
+                next,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break candidate,
+                Err(actual) => candidate = actual,
+            }
         };
         let mut map = BTreeMap::new();
         for node in self.nodes {
