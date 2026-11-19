@@ -293,7 +293,7 @@ fn pinned_pointee_address_survives_handle_move_and_container_swap() {
     let pinned = StablePinned::new(NotUnpin { value: 42, _pin: PhantomPinned });
     let original = pinned.view().get_ref() as *const NotUnpin as usize;
     let other = StablePinned::new(NotUnpin { value: 7, _pin: PhantomPinned });
-    let mut handles = vec![pinned, other];
+    let mut handles = [pinned, other];
     handles.swap(0, 1);
     assert_eq!(handles[1].view().get_ref() as *const NotUnpin as usize, original);
     assert_eq!(handles[1].view().get_ref().value, 42);
