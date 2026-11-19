@@ -17,11 +17,17 @@ fn node(id: u32, children: &[u32]) -> GraphNode {
     }
 }
 fn cycle(domain: u64) -> UniqueGraph {
-    UniqueGraph::new(domain, 1, vec![node(1, &[2, 3]), node(2, &[3]), node(3, &[1])])
-        .expect("trusted test model has a nonzero domain")
+    UniqueGraph::new(
+        domain,
+        1,
+        vec![node(1, &[2, 3]), node(2, &[3]), node(3, &[1])],
+    )
+    .expect("trusted test model has a nonzero domain")
 }
 fn freeze(graph: UniqueGraph) -> atto_borrow_checker::runtime_capabilities_v1::FrozenOwner {
-    graph.freeze(FreezeLimits::default()).expect("bounded, exclusive graph must freeze")
+    graph
+        .freeze(FreezeLimits::default())
+        .expect("bounded, exclusive graph must freeze")
 }
 
 #[test]
@@ -29,11 +35,16 @@ fn freezes_complete_cyclic_graph_and_exposes_only_immutable_views() {
     let owner = freeze(cycle(17));
     let permit = owner.issue_read_permit();
     let reader = owner.share();
-    let (root, count, bytes, next) = reader.read(&permit, |graph| {
-        (graph.root(), graph.node_count(),
-            graph.node(2).unwrap().payload().to_vec(),
-            graph.node(1).unwrap().children().to_vec())
-    }).unwrap();
+    let (root, count, bytes, next) = reader
+        .read(&permit, |graph| {
+            (
+                graph.root(),
+                graph.node_count(),
+                graph.node(2).unwrap().payload().to_vec(),
+                graph.node(1).unwrap().children().to_vec(),
+            )
+        })
+        .unwrap();
     assert_eq!((root, count), (1, 3));
     assert_eq!(bytes, vec![2]);
     assert_eq!(next, vec![2, 3]);
@@ -49,7 +60,10 @@ fn deep_copy_independently_clones_nested_payloads_and_retains_cycle_edges() {
     assert_eq!(source.payload(2), Some(&[2][..]));
     assert_eq!(copy.payload(2), Some(&[2][..]));
     // Both buffers contain identical bytes, but not the same heap memory.
-    assert_ne!(source.payload(2).unwrap().as_ptr(), copy.payload(2).unwrap().as_ptr());
+    assert_ne!(
+        source.payload(2).unwrap().as_ptr(),
+        copy.payload(2).unwrap().as_ptr()
+    );
     copy.replace_payload(2, vec![88, 89]).unwrap();
     assert_eq!(source.payload(2), Some(&[2][..]));
     assert_eq!(copy.payload(2), Some(&[88, 89][..]));
@@ -64,9 +78,7 @@ fn deep_copy_independently_clones_nested_payloads_and_retains_cycle_edges() {
 fn deep_copy_preserves_duplicate_internal_references_without_external_aliases() {
     // Two edges in the copy must still refer to ONE cloned local node,
     // not accidentally produce two disjoint children or alias the source.
-    let original = UniqueGraph::new(19, 1, vec![
-        node(1, &[2, 2]), node(2, &[1]),
-    ]).unwrap();
+    let original = UniqueGraph::new(19, 1, vec![node(1, &[2, 2]), node(2, &[1])]).unwrap();
     let mut copy = original.deep_copy(FreezeLimits::default()).unwrap();
     assert_eq!(copy.children(1), Some(&[2, 2][..]));
     copy.replace_payload(2, vec![90]).unwrap();
@@ -77,14 +89,18 @@ fn deep_copy_preserves_duplicate_internal_references_without_external_aliases() 
 #[test]
 fn deep_copy_rejects_external_mutable_edges_before_copying() {
     for kind in [
-        NodeKind::ExternalMutableAlias, NodeKind::InteriorMutable,
-        NodeKind::ForeignPointer, NodeKind::UnverifiedDynamic,
+        NodeKind::ExternalMutableAlias,
+        NodeKind::InteriorMutable,
+        NodeKind::ForeignPointer,
+        NodeKind::UnverifiedDynamic,
     ] {
         let mut external = node(2, &[]);
         external.kind = kind;
         let source = UniqueGraph::new(17, 1, vec![node(1, &[2]), external]).unwrap();
-        assert_eq!(source.deep_copy(FreezeLimits::default()).unwrap_err(),
-            E::UnfreezableEdge);
+        assert_eq!(
+            source.deep_copy(FreezeLimits::default()).unwrap_err(),
+            E::UnfreezableEdge
+        );
         // The source remains owned, not consumed by a failed copy.
         assert_eq!(source.payload(1), Some(&[1][..]));
     }
@@ -93,11 +109,21 @@ fn deep_copy_rejects_external_mutable_edges_before_copying() {
 #[test]
 fn deep_copy_preflights_graph_limits_and_missing_edges() {
     let source = cycle(17);
-    assert_eq!(source.deep_copy(FreezeLimits {
-        max_nodes: 100, max_edges: 1, max_bytes: 4096,
-    }).unwrap_err(), E::BudgetExceeded);
+    assert_eq!(
+        source
+            .deep_copy(FreezeLimits {
+                max_nodes: 100,
+                max_edges: 1,
+                max_bytes: 4096,
+            })
+            .unwrap_err(),
+        E::BudgetExceeded
+    );
     let missing = UniqueGraph::new(17, 1, vec![node(1, &[999])]).unwrap();
-    assert_eq!(missing.deep_copy(FreezeLimits::default()).unwrap_err(), E::UnknownEdge);
+    assert_eq!(
+        missing.deep_copy(FreezeLimits::default()).unwrap_err(),
+        E::UnknownEdge
+    );
 }
 
 #[test]
@@ -123,46 +149,89 @@ fn refuses_every_unproven_mutable_or_foreign_graph_edge() {
         let mut child = node(2, &[]);
         child.kind = kind;
         let graph = UniqueGraph::new(17, 1, vec![node(1, &[2]), child]).unwrap();
-        assert_eq!(graph.freeze(FreezeLimits::default()).unwrap_err().0,
-            E::UnfreezableEdge, "{kind:?}");
+        assert_eq!(
+            graph.freeze(FreezeLimits::default()).unwrap_err().0,
+            E::UnfreezableEdge,
+            "{kind:?}"
+        );
     }
 }
 
 #[test]
 fn rejects_missing_children_and_unreachable_graph_components() {
     let missing = UniqueGraph::new(17, 1, vec![node(1, &[999])]).unwrap();
-    assert_eq!(missing.freeze(FreezeLimits::default()).unwrap_err().0, E::UnknownEdge);
+    assert_eq!(
+        missing.freeze(FreezeLimits::default()).unwrap_err().0,
+        E::UnknownEdge
+    );
     let disconnected = UniqueGraph::new(17, 1, vec![node(1, &[]), node(2, &[])]).unwrap();
-    assert_eq!(disconnected.freeze(FreezeLimits::default()).unwrap_err().0,
-        E::DisconnectedGraph);
+    assert_eq!(
+        disconnected.freeze(FreezeLimits::default()).unwrap_err().0,
+        E::DisconnectedGraph
+    );
 }
 
 #[test]
 fn rejects_duplicate_zero_and_missing_root_ids() {
     let duplicate = UniqueGraph::new(17, 1, vec![node(1, &[1]), node(1, &[])]).unwrap();
-    assert_eq!(duplicate.freeze(FreezeLimits::default()).unwrap_err().0, E::DuplicateNode);
+    assert_eq!(
+        duplicate.freeze(FreezeLimits::default()).unwrap_err().0,
+        E::DuplicateNode
+    );
     let zero = UniqueGraph::new(17, 1, vec![node(0, &[])]).unwrap();
-    assert_eq!(zero.freeze(FreezeLimits::default()).unwrap_err().0, E::InvalidNode);
+    assert_eq!(
+        zero.freeze(FreezeLimits::default()).unwrap_err().0,
+        E::InvalidNode
+    );
     let wrong_root = UniqueGraph::new(17, 4, vec![node(1, &[])]).unwrap();
-    assert_eq!(wrong_root.freeze(FreezeLimits::default()).unwrap_err().0, E::UnknownEdge);
-    assert!(matches!(UniqueGraph::new(0, 1, vec![node(1, &[])]),
-        Err(E::InvalidDomain)));
+    assert_eq!(
+        wrong_root.freeze(FreezeLimits::default()).unwrap_err().0,
+        E::UnknownEdge
+    );
+    assert!(matches!(
+        UniqueGraph::new(0, 1, vec![node(1, &[])]),
+        Err(E::InvalidDomain)
+    ));
 }
 
 #[test]
 fn charges_node_edge_and_byte_budgets_before_freeze_publication() {
     let graph = cycle(17);
-    assert_eq!(graph.freeze(FreezeLimits {
-        max_nodes: 2, max_edges: 10, max_bytes: 10,
-    }).unwrap_err().0, E::BudgetExceeded);
+    assert_eq!(
+        graph
+            .freeze(FreezeLimits {
+                max_nodes: 2,
+                max_edges: 10,
+                max_bytes: 10,
+            })
+            .unwrap_err()
+            .0,
+        E::BudgetExceeded
+    );
     let graph = cycle(17);
-    assert_eq!(graph.freeze(FreezeLimits {
-        max_nodes: 10, max_edges: 1, max_bytes: 10,
-    }).unwrap_err().0, E::BudgetExceeded);
+    assert_eq!(
+        graph
+            .freeze(FreezeLimits {
+                max_nodes: 10,
+                max_edges: 1,
+                max_bytes: 10,
+            })
+            .unwrap_err()
+            .0,
+        E::BudgetExceeded
+    );
     let graph = cycle(17);
-    assert_eq!(graph.freeze(FreezeLimits {
-        max_nodes: 10, max_edges: 10, max_bytes: 2,
-    }).unwrap_err().0, E::BudgetExceeded);
+    assert_eq!(
+        graph
+            .freeze(FreezeLimits {
+                max_nodes: 10,
+                max_edges: 10,
+                max_bytes: 2,
+            })
+            .unwrap_err()
+            .0,
+        E::BudgetExceeded
+    );
 }
 
 #[test]
@@ -170,13 +239,20 @@ fn weak_upgrade_works_only_for_exact_owner_minted_region_rights() {
     let owner = freeze(cycle(17));
     let permit = owner.issue_read_permit();
     let weak = owner.downgrade();
-    assert_eq!(weak.upgrade(&permit).unwrap().read(&permit, |g| g.node_count()),
-        Ok(3));
+    assert_eq!(
+        weak.upgrade(&permit)
+            .unwrap()
+            .read(&permit, |g| g.node_count()),
+        Ok(3)
+    );
     // Same numerical domain is not enough: a permit belongs to one region.
     let other = freeze(cycle(17));
     let wrong = other.issue_read_permit();
     assert!(weak.upgrade(&wrong).is_none());
-    assert_eq!(owner.share().read(&wrong, |g| g.node_count()), Err(E::WrongDomain));
+    assert_eq!(
+        owner.share().read(&wrong, |g| g.node_count()),
+        Err(E::WrongDomain)
+    );
     let foreign = freeze(cycle(77)).issue_read_permit();
     assert!(weak.upgrade(&foreign).is_none());
 }
@@ -227,11 +303,15 @@ fn retirement_is_nonparking_while_existing_read_scope_is_active() {
     let weak = owner.downgrade();
     let (entered_tx, entered_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
-    let reader = thread::spawn(move || shared.read(&permit, |graph| {
-        entered_tx.send(()).unwrap();
-        release_rx.recv().unwrap();
-        graph.node_count()
-    }).unwrap());
+    let reader = thread::spawn(move || {
+        shared
+            .read(&permit, |graph| {
+                entered_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                graph.node_count()
+            })
+            .unwrap()
+    });
     entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
     // Existing read may finish, but retirement is already logically effective.
     assert_eq!(owner.retire(), Err(E::Busy));
@@ -248,10 +328,13 @@ fn dropping_owner_inside_reader_callback_cannot_deadlock_or_reopen_rights() {
     let shared = owner.share();
     let weak = owner.downgrade();
     let mut owner = Some(owner);
-    assert_eq!(shared.read(&permit, |graph| {
-        drop(owner.take()); // Must not wait for its own active read lock.
-        graph.node_count()
-    }), Ok(3));
+    assert_eq!(
+        shared.read(&permit, |graph| {
+            drop(owner.take()); // Must not wait for its own active read lock.
+            graph.node_count()
+        }),
+        Ok(3)
+    );
     assert!(weak.upgrade(&permit).is_none());
 }
 
@@ -277,7 +360,9 @@ fn simultaneous_weak_upgrades_vs_retirement_never_dereference_freed_data() {
     }
     barrier.wait();
     assert!(matches!(owner.retire(), Ok(()) | Err(E::Busy)));
-    for thread in handles { thread.join().unwrap(); }
+    for thread in handles {
+        thread.join().unwrap();
+    }
     assert!(weak.upgrade(&permit).is_none());
     assert_eq!(owner.retire(), Ok(()));
 }
@@ -290,22 +375,36 @@ struct NotUnpin {
 
 #[test]
 fn pinned_pointee_address_survives_handle_move_and_container_swap() {
-    let pinned = StablePinned::new(NotUnpin { value: 42, _pin: PhantomPinned });
+    let pinned = StablePinned::new(NotUnpin {
+        value: 42,
+        _pin: PhantomPinned,
+    });
     let original = pinned.view().get_ref() as *const NotUnpin as usize;
-    let other = StablePinned::new(NotUnpin { value: 7, _pin: PhantomPinned });
+    let other = StablePinned::new(NotUnpin {
+        value: 7,
+        _pin: PhantomPinned,
+    });
     let mut handles = [pinned, other];
     handles.swap(0, 1);
-    assert_eq!(handles[1].view().get_ref() as *const NotUnpin as usize, original);
+    assert_eq!(
+        handles[1].view().get_ref() as *const NotUnpin as usize,
+        original
+    );
     assert_eq!(handles[1].view().get_ref().value, 42);
 }
 
 #[test]
 fn pinned_storage_survives_moving_handle_between_threads() {
-    let pinned = StablePinned::new(NotUnpin { value: 93, _pin: PhantomPinned });
+    let pinned = StablePinned::new(NotUnpin {
+        value: 93,
+        _pin: PhantomPinned,
+    });
     let address = pinned.view().get_ref() as *const NotUnpin as usize;
     let join = thread::spawn(move || {
-        (pinned.view().get_ref() as *const NotUnpin as usize,
-            pinned.view().get_ref().value)
+        (
+            pinned.view().get_ref() as *const NotUnpin as usize,
+            pinned.view().get_ref().value,
+        )
     });
     assert_eq!(join.join().unwrap(), (address, 93));
 }
@@ -326,7 +425,10 @@ fn concurrent_freezes_mint_distinct_region_read_capabilities() {
         })
         .collect();
     barrier.wait();
-    let owners: Vec<_> = workers.into_iter().map(|worker| worker.join().unwrap()).collect();
+    let owners: Vec<_> = workers
+        .into_iter()
+        .map(|worker| worker.join().unwrap())
+        .collect();
     for (index, owner) in owners.iter().enumerate() {
         let permit = owner.issue_read_permit();
         assert_eq!(owner.share().read(&permit, |g| g.node_count()), Ok(3));
