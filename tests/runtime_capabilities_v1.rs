@@ -309,3 +309,35 @@ fn pinned_storage_survives_moving_handle_between_threads() {
     });
     assert_eq!(join.join().unwrap(), (address, 93));
 }
+
+#[test]
+fn concurrent_freezes_mint_distinct_region_read_capabilities() {
+    // Identical numeric actor domains never authorize cross-region reads.
+    // Concurrent identity creation must remain unique after CAS retries.
+    const COUNT: usize = 12;
+    let barrier = Arc::new(Barrier::new(COUNT + 1));
+    let workers: Vec<_> = (0..COUNT)
+        .map(|_| {
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || {
+                barrier.wait();
+                freeze(cycle(17))
+            })
+        })
+        .collect();
+    barrier.wait();
+    let owners: Vec<_> = workers.into_iter().map(|worker| worker.join().unwrap()).collect();
+    for (index, owner) in owners.iter().enumerate() {
+        let permit = owner.issue_read_permit();
+        assert_eq!(owner.share().read(&permit, |g| g.node_count()), Ok(3));
+        for (other_index, other) in owners.iter().enumerate() {
+            if index != other_index {
+                assert_eq!(
+                    other.share().read(&permit, |g| g.node_count()),
+                    Err(E::WrongDomain),
+                    "two simultaneously live frozen owners must not share a permit"
+                );
+            }
+        }
+    }
+}
