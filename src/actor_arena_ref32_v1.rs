@@ -5,13 +5,15 @@
 //! loan/continuation/I/O quiescence before freeing backing storage. This module
 //! grants no shared-region permission: use guarded, generation-fenced runtime
 //! loans before entering an explicitly authorized shared domain.
-use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_ARENA_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Zero is reserved as a null/invalid guest offset.
 pub const MAX_REF32_CAPACITY: u64 = u32::MAX as u64;
+/// Fixed model budget: native backends must enforce their own actor metadata quotas.
+/// This is NOT a general Atto heap-size limit.
+pub const MAX_TRACKED_ALLOCATIONS: usize = 16_384;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Ref32Error {
@@ -21,6 +23,7 @@ pub enum Ref32Error {
     InvalidAlignment,
     ArenaIdExhausted,
     AllocationIdExhausted,
+    MetadataExhausted,
     Exhausted,
     WrongArena,
     WrongActor,
@@ -51,6 +54,7 @@ impl Ref32 {
 
 #[derive(Clone, Copy, Debug)]
 struct Allocation {
+    offset: u32,
     size: u32,
     id: u64,
 }
@@ -66,7 +70,9 @@ pub struct ActorArenaRef32 {
     capacity: u64,
     next_offset: u64,
     next_allocation_id: u64,
-    allocations: BTreeMap<u32, Allocation>,
+    // Bump allocations are strictly ascending; bound and fallibly reserve
+    // metadata instead of allowing unbounded infallible map insertion.
+    allocations: Vec<Allocation>,
     retired: bool,
 }
 
@@ -90,7 +96,7 @@ impl ActorArenaRef32 {
             capacity,
             next_offset: 1,
             next_allocation_id: 1,
-            allocations: BTreeMap::new(),
+            allocations: Vec::new(),
             retired: false,
         })
     }
@@ -137,14 +143,19 @@ impl ActorArenaRef32 {
             .checked_add(1)
             .ok_or(Ref32Error::AllocationIdExhausted)?;
         let offset = u32::try_from(start).map_err(|_| Ref32Error::Exhausted)?;
+        // Reserve metadata before advancing the next offset or allocation ID.
+        if self.allocations.len() >= MAX_TRACKED_ALLOCATIONS {
+            return Err(Ref32Error::MetadataExhausted);
+        }
+        self.allocations
+            .try_reserve(1)
+            .map_err(|_| Ref32Error::MetadataExhausted)?;
         let allocation_id = self.next_allocation_id;
-        self.allocations.insert(
+        self.allocations.push(Allocation {
             offset,
-            Allocation {
-                size,
-                id: allocation_id,
-            },
-        );
+            size,
+            id: allocation_id,
+        });
         self.next_offset = end;
         self.next_allocation_id = next_id;
         Ok(Ref32 {
@@ -189,7 +200,9 @@ impl ActorArenaRef32 {
         check_alignment(alignment)?;
         let allocation = self
             .allocations
-            .get(&reference.offset)
+            .binary_search_by_key(&reference.offset, |record| record.offset)
+            .ok()
+            .and_then(|index| self.allocations.get(index))
             .ok_or(Ref32Error::StaleAllocation)?;
         if allocation.id != reference.allocation_id {
             return Err(Ref32Error::StaleAllocation);
