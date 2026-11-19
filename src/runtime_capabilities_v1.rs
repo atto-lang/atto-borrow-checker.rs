@@ -59,7 +59,11 @@ pub struct FreezeLimits {
 
 impl Default for FreezeLimits {
     fn default() -> Self {
-        Self { max_nodes: 1024, max_edges: 4096, max_bytes: 1024 * 1024 }
+        Self {
+            max_nodes: 1024,
+            max_edges: 4096,
+            max_bytes: 1024 * 1024,
+        }
     }
 }
 
@@ -80,7 +84,11 @@ impl UniqueGraph {
         if domain == 0 {
             return Err(CapabilityError::InvalidDomain);
         }
-        Ok(Self { domain, root, nodes })
+        Ok(Self {
+            domain,
+            root,
+            nodes,
+        })
     }
 
     /// Perform a verified, truly independent deep copy without consuming the
@@ -95,15 +103,18 @@ impl UniqueGraph {
     pub fn deep_copy(&self, limits: FreezeLimits) -> Result<Self, CapabilityError> {
         self.validate(limits)?;
         let mut nodes = Vec::new();
-        nodes.try_reserve_exact(self.nodes.len())
+        nodes
+            .try_reserve_exact(self.nodes.len())
             .map_err(|_| CapabilityError::AllocationFailed)?;
         for node in &self.nodes {
             let mut payload = Vec::new();
-            payload.try_reserve_exact(node.payload.len())
+            payload
+                .try_reserve_exact(node.payload.len())
                 .map_err(|_| CapabilityError::AllocationFailed)?;
             payload.extend_from_slice(&node.payload);
             let mut children = Vec::new();
-            children.try_reserve_exact(node.children.len())
+            children
+                .try_reserve_exact(node.children.len())
                 .map_err(|_| CapabilityError::AllocationFailed)?;
             children.extend_from_slice(&node.children);
             nodes.push(GraphNode {
@@ -113,22 +124,33 @@ impl UniqueGraph {
                 children,
             });
         }
-        Ok(Self { domain: self.domain, root: self.root, nodes })
+        Ok(Self {
+            domain: self.domain,
+            root: self.root,
+            nodes,
+        })
     }
 
     /// Exposes a read-only payload without a raw pointer. A source compiler
     /// must still enforce its language-specific borrow restrictions.
     pub fn payload(&self, node_id: u32) -> Option<&[u8]> {
-        self.nodes.iter().find(|node| node.id == node_id)
+        self.nodes
+            .iter()
+            .find(|node| node.id == node_id)
             .map(|node| node.payload.as_slice())
     }
 
     /// Mutate only this unique owner. Mutation of its deep copy cannot
     /// silently modify another graph, because copy!! duplicates all vectors.
-    pub fn replace_payload(&mut self, node_id: u32, payload: Vec<u8>)
-        -> Result<(), CapabilityError>
-    {
-        let node = self.nodes.iter_mut().find(|node| node.id == node_id)
+    pub fn replace_payload(
+        &mut self,
+        node_id: u32,
+        payload: Vec<u8>,
+    ) -> Result<(), CapabilityError> {
+        let node = self
+            .nodes
+            .iter_mut()
+            .find(|node| node.id == node_id)
             .ok_or(CapabilityError::InvalidNode)?;
         node.payload = payload;
         Ok(())
@@ -136,14 +158,14 @@ impl UniqueGraph {
 
     /// Read topology by local ID for differential conformance tests.
     pub fn children(&self, node_id: u32) -> Option<&[u32]> {
-        self.nodes.iter().find(|node| node.id == node_id)
+        self.nodes
+            .iter()
+            .find(|node| node.id == node_id)
             .map(|node| node.children.as_slice())
     }
 
     fn validate(&self, limits: FreezeLimits) -> Result<(), CapabilityError> {
-        if self.root == 0 || self.nodes.is_empty()
-            || self.nodes.len() > limits.max_nodes
-        {
+        if self.root == 0 || self.nodes.is_empty() || self.nodes.len() > limits.max_nodes {
             return Err(CapabilityError::BudgetExceeded);
         }
         let mut indices = BTreeMap::new();
@@ -158,9 +180,11 @@ impl UniqueGraph {
             if node.kind != NodeKind::Plain {
                 return Err(CapabilityError::UnfreezableEdge);
             }
-            edges = edges.checked_add(node.children.len())
+            edges = edges
+                .checked_add(node.children.len())
                 .ok_or(CapabilityError::BudgetExceeded)?;
-            bytes = bytes.checked_add(node.payload.len())
+            bytes = bytes
+                .checked_add(node.payload.len())
                 .ok_or(CapabilityError::BudgetExceeded)?;
             if edges > limits.max_edges || bytes > limits.max_bytes {
                 return Err(CapabilityError::BudgetExceeded);
@@ -217,18 +241,26 @@ impl UniqueGraph {
         };
         let mut map = BTreeMap::new();
         for node in self.nodes {
-            map.insert(node.id, FrozenNode {
-                payload: node.payload, children: node.children,
-            });
+            map.insert(
+                node.id,
+                FrozenNode {
+                    payload: node.payload,
+                    children: node.children,
+                },
+            );
         }
         Ok(FrozenOwner {
             region: Arc::new(FrozenRegion {
-                id, domain: self.domain,
+                id,
+                domain: self.domain,
                 retired: AtomicBool::new(false),
                 // Physical read scopes and retirement admission use a lock.
                 // The atomic retirement bit allows nonblocking owner Drop.
                 leases: RwLock::new(()),
-                graph: FrozenGraph { root: self.root, nodes: map },
+                graph: FrozenGraph {
+                    root: self.root,
+                    nodes: map,
+                },
             }),
         })
     }
@@ -240,8 +272,12 @@ pub struct FrozenNode {
     children: Vec<u32>,
 }
 impl FrozenNode {
-    pub fn payload(&self) -> &[u8] { &self.payload }
-    pub fn children(&self) -> &[u32] { &self.children }
+    pub fn payload(&self) -> &[u8] {
+        &self.payload
+    }
+    pub fn children(&self) -> &[u32] {
+        &self.children
+    }
 }
 
 /// Immutable graph view; no guest-visible interior mutation is exposed.
@@ -251,9 +287,15 @@ pub struct FrozenGraph {
     nodes: BTreeMap<u32, FrozenNode>,
 }
 impl FrozenGraph {
-    pub fn root(&self) -> u32 { self.root }
-    pub fn node(&self, id: u32) -> Option<&FrozenNode> { self.nodes.get(&id) }
-    pub fn node_count(&self) -> usize { self.nodes.len() }
+    pub fn root(&self) -> u32 {
+        self.root
+    }
+    pub fn node(&self, id: u32) -> Option<&FrozenNode> {
+        self.nodes.get(&id)
+    }
+    pub fn node_count(&self) -> usize {
+        self.nodes.len()
+    }
 }
 
 #[derive(Debug)]
@@ -287,10 +329,15 @@ impl FrozenOwner {
     /// The only public minting path for a read permit is possession of this
     /// region's exclusive host owner. The permit is not a guest-visible type.
     pub fn issue_read_permit(&self) -> HostDomainPermit {
-        HostDomainPermit { domain: self.region.domain, region_id: self.region.id }
+        HostDomainPermit {
+            domain: self.region.domain,
+            region_id: self.region.id,
+        }
     }
     pub fn share(&self) -> FrozenShared {
-        FrozenShared { region: Arc::clone(&self.region) }
+        FrozenShared {
+            region: Arc::clone(&self.region),
+        }
     }
     pub fn downgrade(&self) -> FrozenWeak {
         self.share().downgrade()
@@ -373,7 +420,9 @@ impl FrozenWeak {
         // Weak upgrade may return None on contention. No strong owner is
         // returned until the exact identity and retirement checks pass.
         let _lease = strong.leases.try_read().ok()?;
-        if strong.retired.load(Ordering::SeqCst) { return None; }
+        if strong.retired.load(Ordering::SeqCst) {
+            return None;
+        }
         drop(_lease);
         // A concurrent retire AFTER this point is valid: it must block or
         // invalidate later read() calls. Success never grants mutable access.
@@ -390,7 +439,9 @@ pub struct StablePinned<T> {
 }
 impl<T> StablePinned<T> {
     pub fn new(value: T) -> Self {
-        Self { allocation: Box::pin(value) }
+        Self {
+            allocation: Box::pin(value),
+        }
     }
     pub fn view(&self) -> Pin<&T> {
         self.allocation.as_ref()
