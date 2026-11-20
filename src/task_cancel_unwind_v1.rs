@@ -124,6 +124,12 @@ pub fn verify_cancel_unwind_paths(
                     if matches!(path.kind, ExitKind::Cancelled | ExitKind::Timeout) && !cancel_seen {
                         return Err(bad("E_TASK_CANCEL_UNOBSERVED", path, at));
                     }
+                    // Once a task has observed cancellation, its final state
+                    // cannot be silently rewritten into a successful Return.
+                    // A typed cancellation outcome remains distinct from T.
+                    if cancel_seen && matches!(path.kind, ExitKind::Return) {
+                        return Err(bad("E_TASK_CANCEL_TERMINAL", path, at));
+                    }
                     terminal = true;
                 }
             }
@@ -200,6 +206,16 @@ mod tests {
         assert_eq!(err(ExitKind::Cancelled, vec![child(1), CAN, RET]),
             "E_TASK_CHILD_NOT_RETIRED");
         assert_eq!(err(ExitKind::Cancelled, vec![RET]), "E_TASK_CANCEL_UNOBSERVED");
+    }
+    #[test]
+    fn cancellation_observed_cannot_be_reclassified_as_success() {
+        assert_eq!(err(ExitKind::Return, vec![CAN, RET]), "E_TASK_CANCEL_TERMINAL");
+        assert_eq!(err(ExitKind::Return, vec![lock(1), CAN, release(1), RET]),
+            "E_TASK_CANCEL_TERMINAL");
+        assert_eq!(check(ExitKind::Cancelled, vec![lock(1), CAN, release(1), RET]), Ok(()));
+        // A task that completes successfully before cancellation is observed
+        // remains a valid one-shot success outcome.
+        assert_eq!(check(ExitKind::Return, vec![lock(1), release(1), RET]), Ok(()));
     }
     #[test]
     fn cannot_forge_foreign_children_or_reuse_child_ids() {
