@@ -8,6 +8,8 @@ Compiler-local type inference, ownership state changes and CFG construction can 
 
 See [hybrid integration design](docs/HYBRID_COMPILER_INTEGRATION.md).
 
+The Rust V0 checker also has a **proposed** lexical `critical-read`/`critical-write` typed-MIR static gate. It rejects wrong-mode state writes, scope escape, nested access, suspension and actor/task boundary effects, but does not prove any compiler lowering or physical reader/writer lock. See [critical-state MIR V0](docs/CRITICAL_STATE_MIR_V0.md).
+
 ## Current implementation
 
 `actor_arena_ref32_v1` models nonzero 32-bit arena-relative offsets, per-actor/arena/generation identity, allocation extents and alignment, overflow-denial, and stale-retirement rejection. Its independent Rust tests are **model-only**: there is no actual native heap, pointer, physical shared-memory guard, compiler lowering, or quiescence proof in this module. Backend integrations must retain arena/domain/generation metadata outside the 32-bit guest offset, verify each access, and separately enforce loan and physical-retirement rules.
