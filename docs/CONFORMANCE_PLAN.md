@@ -175,3 +175,40 @@ old Node tests then become redundant.
    persistent worker) and blocks codegen on any failing class. CI matrix: every
    backend × L1/L2/L3 on exact heads, via the authorized mirror carrier while
    hosted Actions are billing-blocked.
+
+## M1 adapter notes: `atto-source.rs` (survey of `src/check.rs` at `7f893323`)
+
+The checker is lexical and AST-driven. Its `FnCx` keeps
+`moved: BTreeSet<slot>` and `loans: BTreeMap<loan_slot, ScopedLoan{owner, mutable}>`.
+Branch arms union `moved`, and `pop_scope` silently removes loans and moves when
+a scope ends. To export MIR faithfully:
+
+- **Owner ids** are `slot + 1`; canonical ids must be nonzero. **Loan ids**
+  are the borrowing binder's slot + 1. **Move destinations** come from the
+  destination local's slot, or a fresh id above `MAX_LOCALS` for temporaries.
+- **Record before check.** The checker returns its first error, so emit each
+  event *before* the corresponding check. A rejected function then exports the
+  event prefix up to and including the failing op, and canonical has to find
+  the same failing op independently. Mark the record
+  `note: "prefix-at-local-error"`.
+- **Close loans at exit.** `return` exits the lexical scopes that hold live
+  loans, so emit `EndBorrow` for every live loan before `Return`. Otherwise
+  each function that holds a loan reports a false `E_LOAN_ESCAPE`.
+- **Hook sites:**
+  - `Var` reads → `Read`;
+  - field assignment → `Write`;
+  - `consume()` (binding initializer, assignment, argument and return of a
+    class local) and `take!` → `Move`;
+  - `borrow_binding` → `Borrow`;
+  - `pop_scope` loan removal → `EndBorrow`;
+  - standalone `drop!` → `Drop`;
+  - `new C()` binding → `Init{copy:false, send:false}`;
+  - scalar locals → `Init{copy:true}`.
+- **Fail closed** with `mirUnavailable` for if/match/loops, calls with
+  non-scalar arguments (until the implicit-borrow effect summary is exported),
+  closures, actors, `isolated` cleanup bodies and generators. Branches can
+  become real CFG blocks once M3 gives canonical joins.
+- **Diagnostics** already use `E_MOVED` / `E_BORROW`, so no retagging is
+  needed. Expect `BACKEND_STRICTER` for its conservative rejects, e.g.
+  `E_BORROW` on "reborrowing a borrowed handle", which the canonical model has
+  no op for. Track those as known strictness rather than failures.
