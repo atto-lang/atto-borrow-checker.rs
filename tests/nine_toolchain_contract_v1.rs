@@ -482,22 +482,28 @@ fn differential_v1_catalog_stays_synchronized_with_canonical_rust_cases() {
             .expect("missing Rust fixture from differential catalog");
         assert_eq!(profile, "mir-v0-acyclic", "case {}", fixture.id);
         match fixture.diagnostic {
-            None => assert_eq!((decision, diagnostic), ("allow", "-"), "case {}", fixture.id),
-            Some(code) => assert_eq!(
-                (decision, diagnostic),
-                ("reject", code),
-                "case {}",
-                fixture.id
-            ),
+            None => {
+                assert_eq!(
+                    (decision, diagnostic),
+                    ("allow", "-"),
+                    "case {}",
+                    fixture.id
+                );
+            }
+            Some(code) => {
+                assert_eq!(
+                    (decision, diagnostic),
+                    ("reject", code),
+                    "case {}",
+                    fixture.id
+                );
+            }
         }
     }
+    let unknown_effect = ("mir-v1-envelope", "reject", "E_MIR_UNSUPPORTED_EFFECT");
     assert_eq!(
         rows.remove("C20"),
-        Some((
-            "mir-v1-envelope",
-            "reject",
-            "E_MIR_UNSUPPORTED_EFFECT"
-        )),
+        Some(unknown_effect),
         "MIR unknown-effect failure must stay in the catalog"
     );
     assert!(rows.is_empty(), "unknown differential fixture IDs");
