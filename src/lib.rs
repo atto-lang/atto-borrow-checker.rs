@@ -1015,3 +1015,5 @@ pub mod mir_v1;
 pub mod cyclic_v1;
 /// Strict standalone verifier of restricted source-bound actor guard event reports.
 pub mod actor_source_mir_v0;
+/// Independent bounded source-derived diamond CFG verifier.
+pub mod actor_source_cfg_v1;
