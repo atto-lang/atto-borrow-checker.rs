@@ -38,6 +38,10 @@ python3 conformance/borrow-v1/compare.py \
 
 **Never publish a green `compare.py` result as proof that the independent compiler ran.** It only compares submitted source-free reports with the versioned fixture catalog. Even perfectly matching reports can both omit an actual source effect. CI must execute the real compiler and the canonical Rust checker, verify the exact input source/tree and toolchain SHA, and bind produced native diagnostics to actual compiler process exit status, source spans and MIR/emitted-code inventories.
 
+## Two-tier invocation policy
+
+The full CI/CD architecture is specified in [CI_DEEP_VERIFICATION.md](CI_DEEP_VERIFICATION.md). Normal builds run the compiler's **own** borrow checker in its ordinary type/CFG pass. Once real authenticated typed-MIR producers are integrated, CI/CD runs the Rust canonical verifier in a deeper strict mode across full exported control-flow graphs, compares both checkers, validates source/MIR/emission inventories and executes actual guest tests. CI has a larger analysis budget than an incremental developer build, but cannot claim deep feature proof before the corresponding Rust model and compiler adapter are implemented and tested. Missing/unsupported checks fail closed. Current V0 is not a whole-program or complete lifetime verifier.
+
 ## Conformance phases and release gates
 
 | Phase | Required proof | Current state |
