@@ -455,3 +455,50 @@ fn cyclic_oracle_matches_llvm_fixed_point_loop_decisions() {
     let unsafe_loop = program(CyclicOp::Move(root.clone()));
     assert_eq!(check(&unsafe_loop).unwrap_err().code, Code::UseAfterMove);
 }
+
+#[test]
+fn differential_v1_catalog_stays_synchronized_with_canonical_rust_cases() {
+    use std::collections::BTreeMap;
+
+    let mut rows = BTreeMap::new();
+    for line in include_str!("../conformance/borrow-v1/cases.tsv").lines() {
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let fields: Vec<&str> = line.split('\t').collect();
+        assert_eq!(fields.len(), 4, "malformed differential catalog line");
+        assert!(
+            rows.insert(fields[0], (fields[1], fields[2], fields[3]))
+                .is_none(),
+            "duplicate differential fixture ID"
+        );
+    }
+
+    let native = all_native_cases();
+    assert_eq!(native.len(), 21);
+    for fixture in native {
+        let (profile, decision, diagnostic) = rows
+            .remove(fixture.id)
+            .expect("missing Rust fixture from differential catalog");
+        assert_eq!(profile, "mir-v0-acyclic", "case {}", fixture.id);
+        match fixture.diagnostic {
+            None => assert_eq!((decision, diagnostic), ("allow", "-"), "case {}", fixture.id),
+            Some(code) => assert_eq!(
+                (decision, diagnostic),
+                ("reject", code),
+                "case {}",
+                fixture.id
+            ),
+        }
+    }
+    assert_eq!(
+        rows.remove("C20"),
+        Some((
+            "mir-v1-envelope",
+            "reject",
+            "E_MIR_UNSUPPORTED_EFFECT"
+        )),
+        "MIR unknown-effect failure must stay in the catalog"
+    );
+    assert!(rows.is_empty(), "unknown differential fixture IDs");
+}
