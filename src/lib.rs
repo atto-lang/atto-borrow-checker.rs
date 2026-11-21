@@ -1013,3 +1013,5 @@ pub mod mir_v1;
 
 /// Explicit field-projection/loop model; not an implicit V0 or MIR upgrade.
 pub mod cyclic_v1;
+/// Strict standalone verifier of restricted source-bound actor guard event reports.
+pub mod actor_source_mir_v0;
