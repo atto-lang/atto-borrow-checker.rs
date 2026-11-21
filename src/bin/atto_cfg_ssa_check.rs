@@ -72,12 +72,18 @@ mod tests {
 
     #[test]
     fn rejects_empty_manifest() {
-        assert_eq!(read_limited(&b""[..]).unwrap_err(), "loan CFG manifest is empty");
+        assert_eq!(
+            read_limited(&b""[..]).unwrap_err(),
+            "loan CFG manifest is empty"
+        );
     }
 
     #[test]
     fn accepts_bounded_utf8_manifest() {
-        assert_eq!(read_limited(&b"ATTO_LOAN_CFG_V1\n"[..]).unwrap(), "ATTO_LOAN_CFG_V1\n");
+        assert_eq!(
+            read_limited(&b"ATTO_LOAN_CFG_V1\n"[..]).unwrap(),
+            "ATTO_LOAN_CFG_V1\n"
+        );
     }
 
     #[test]
