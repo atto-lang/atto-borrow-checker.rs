@@ -71,7 +71,8 @@ fn is_hex(value: &str, expected_len: usize) -> bool {
     value.len() == expected_len && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
-fn expected_effect(op: &Op) -> Effect {
+/// The effect class an op must be tagged with; backends tag instructions with this.
+pub fn expected_effect(op: &Op) -> Effect {
     match op {
         Op::Suspend => Effect::Suspension,
         Op::ActorHopBorrow { .. }
