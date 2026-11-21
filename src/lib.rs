@@ -8,10 +8,10 @@
 //! it does not silently broaden this API's cleanup or MIR proof contract.
 use std::collections::{BTreeMap, BTreeSet};
 
-pub mod atto_compiler_cfg_bridge_v1;
 pub mod actor_arena_ref32_v1;
 pub mod actor_state_guard_v1;
 pub mod actor_state_runtime_v1;
+pub mod atto_compiler_cfg_bridge_v1;
 pub mod mir_lifetime_census_v1;
 pub mod mir_loan_census_v1;
 pub mod polonius_facts_v1;
