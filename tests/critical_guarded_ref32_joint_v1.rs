@@ -412,3 +412,235 @@ fn guarded_fifo_blocks_writer_until_readers_exit_despite_static_write_proof() {
     assert_eq!(late_readers[0].actor(), 40);
     runtime.release(&late_readers[0], 40).unwrap();
 }
+
+#[test]
+fn joint_model_gate_requires_static_proof_and_live_minted_permit() {
+    use atto_borrow_checker::actor_critical_guarded_model_v1::{
+        verify_joint_model_access, JointModelError, JointModelRequest,
+    };
+
+    let f = static_fixture();
+    let all_sites = sites(&f);
+    let program = critical_program();
+    let (mut runtime, reference) = runtime_fixture();
+    runtime.seal();
+    runtime.request(5, 8, Mode::Read).unwrap();
+    let read = runtime.admit_ready().unwrap().pop().unwrap();
+
+    let mut request = JointModelRequest {
+        program: &program,
+        sites: &all_sites,
+        block: 1,
+        operation: 1,
+        runtime: &runtime,
+        runtime_ref: reference,
+        permit: &read,
+        trusted_holder: 5,
+        displacement: 0,
+        access_bytes: 8,
+        alignment: 8,
+    };
+    assert_eq!(verify_joint_model_access(&request), Ok(8));
+    request.operation = 5; // Write MUST be derived from typed MIR, not caller intent.
+    assert_eq!(
+        verify_joint_model_access(&request),
+        Err(JointModelError::Runtime(GuardedRef32Error::Guard(
+            GuardError::WriteRequiresExclusive
+        )))
+    );
+    // Non-lexical borrows end after the final request use above.
+    runtime.release(&read, 5).unwrap();
+    let after_release = JointModelRequest {
+        program: &program,
+        sites: &all_sites,
+        block: 1,
+        operation: 1,
+        runtime: &runtime,
+        runtime_ref: reference,
+        permit: &read,
+        trusted_holder: 5,
+        displacement: 0,
+        access_bytes: 8,
+        alignment: 8,
+    };
+    assert_eq!(
+        verify_joint_model_access(&after_release),
+        Err(JointModelError::Runtime(GuardedRef32Error::Guard(
+            GuardError::UnknownTicket
+        )))
+    );
+}
+
+#[test]
+fn joint_model_gate_rejects_wrong_extent_offset_and_operation() {
+    use atto_borrow_checker::actor_critical_guarded_model_v1::{
+        verify_joint_model_access, JointModelError, JointModelRequest,
+    };
+    let f = static_fixture();
+    let all_sites = sites(&f);
+    let program = critical_program();
+    let (mut runtime, reference) = runtime_fixture();
+    let second = runtime.allocate_before_seal(16, 8).unwrap();
+    runtime.seal();
+    runtime.request(5, 8, Mode::Read).unwrap();
+    let read = runtime.admit_ready().unwrap().pop().unwrap();
+    let mut request = JointModelRequest {
+        program: &program,
+        sites: &all_sites,
+        block: 1,
+        operation: 1,
+        runtime: &runtime,
+        runtime_ref: reference,
+        permit: &read,
+        trusted_holder: 5,
+        displacement: 0,
+        access_bytes: 8,
+        alignment: 8,
+    };
+    request.access_bytes = 4;
+    assert_eq!(
+        verify_joint_model_access(&request),
+        Err(JointModelError::ExtentMismatch)
+    );
+    request.access_bytes = 8;
+    request.runtime_ref = second; // Same actor/permit, but different allocation.
+    assert_eq!(
+        verify_joint_model_access(&request),
+        Err(JointModelError::OffsetMismatch)
+    );
+    request.runtime_ref = reference;
+    request.operation = 7; // Actor send, not an actual critical read/write.
+    assert_eq!(
+        verify_joint_model_access(&request),
+        Err(JointModelError::UnknownAccessOperation)
+    );
+    request.block = 999;
+    assert_eq!(
+        verify_joint_model_access(&request),
+        Err(JointModelError::UnknownAccessOperation)
+    );
+    runtime.release(&read, 5).unwrap();
+}
+
+#[test]
+fn joint_model_gate_rejects_static_actor_or_generation_mismatch() {
+    use atto_borrow_checker::actor_critical_guarded_model_v1::{
+        verify_joint_model_access, JointModelError, JointModelRequest,
+    };
+    let program = critical_program();
+    let (mut runtime, reference) = runtime_fixture();
+    runtime.seal();
+    runtime.request(5, 8, Mode::Read).unwrap();
+    let read = runtime.admit_ready().unwrap().pop().unwrap();
+
+    let mut f = static_fixture();
+    f.arena.actor_id = 6;
+    f.allocation.actor_id = 6;
+    f.reference.actor_id = 6;
+    f.reader.actor_id = 6;
+    f.writer.actor_id = 6;
+    let all_sites = sites(&f);
+    let mut request = JointModelRequest {
+        program: &program,
+        sites: &all_sites,
+        block: 1,
+        operation: 1,
+        runtime: &runtime,
+        runtime_ref: reference,
+        permit: &read,
+        trusted_holder: 5,
+        displacement: 0,
+        access_bytes: 8,
+        alignment: 8,
+    };
+    assert!(verify_critical_ref32_sites(&program, &all_sites).is_ok());
+    assert_eq!(
+        verify_joint_model_access(&request),
+        Err(JointModelError::DomainMismatch)
+    );
+
+    let mut f2 = static_fixture();
+    f2.arena.generation = 9;
+    f2.allocation.generation = 9;
+    f2.reference.generation = 9;
+    f2.reader.generation = 9;
+    f2.writer.generation = 9;
+    let sites2 = sites(&f2);
+    request.sites = &sites2;
+    assert!(verify_critical_ref32_sites(&program, &sites2).is_ok());
+    assert_eq!(
+        verify_joint_model_access(&request),
+        Err(JointModelError::DomainMismatch)
+    );
+    runtime.release(&read, 5).unwrap();
+}
+
+#[test]
+fn joint_model_gate_denies_missing_static_sites_even_with_live_runtime_permit() {
+    use atto_borrow_checker::actor_critical_guarded_model_v1::{
+        verify_joint_model_access, JointModelError, JointModelRequest,
+    };
+    let f = static_fixture();
+    let all_sites = sites(&f);
+    let program = critical_program();
+    let (mut runtime, reference) = runtime_fixture();
+    runtime.seal();
+    runtime.request(5, 8, Mode::Read).unwrap();
+    let read = runtime.admit_ready().unwrap().pop().unwrap();
+    let request = JointModelRequest {
+        program: &program,
+        sites: &all_sites[..2],
+        block: 1,
+        operation: 1,
+        runtime: &runtime,
+        runtime_ref: reference,
+        permit: &read,
+        trusted_holder: 5,
+        displacement: 0,
+        access_bytes: 8,
+        alignment: 8,
+    };
+    assert_eq!(
+        verify_joint_model_access(&request),
+        Err(JointModelError::Static(CriticalRef32Error::MissingSite {
+            block: 1,
+            operation: 5
+        }))
+    );
+    runtime.release(&read, 5).unwrap();
+}
+
+#[test]
+fn joint_model_gate_denies_retired_permit_and_cannot_prove_physical_quiescence() {
+    use atto_borrow_checker::actor_critical_guarded_model_v1::{
+        verify_joint_model_access, JointModelError, JointModelRequest,
+    };
+    let f = static_fixture();
+    let all_sites = sites(&f);
+    let program = critical_program();
+    let (mut runtime, reference) = runtime_fixture();
+    runtime.seal();
+    runtime.request(5, 8, Mode::Read).unwrap();
+    let read = runtime.admit_ready().unwrap().pop().unwrap();
+    runtime.retire(9).unwrap();
+    let request = JointModelRequest {
+        program: &program,
+        sites: &all_sites,
+        block: 1,
+        operation: 1,
+        runtime: &runtime,
+        runtime_ref: reference,
+        permit: &read,
+        trusted_holder: 5,
+        displacement: 0,
+        access_bytes: 8,
+        alignment: 8,
+    };
+    assert_eq!(
+        verify_joint_model_access(&request),
+        Err(JointModelError::DomainMismatch)
+    );
+    assert!(!runtime.may_reclaim());
+    runtime.complete_physical_quiescence(&read, 5).unwrap();
+    assert!(runtime.may_reclaim());
+}

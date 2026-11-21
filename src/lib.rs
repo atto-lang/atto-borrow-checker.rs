@@ -9,6 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 pub mod actor_arena_ref32_v1;
+pub mod actor_critical_guarded_model_v1;
 pub mod actor_critical_ref32_v1;
 pub mod actor_ref32_guarded_v1;
 pub mod actor_ref32_v1;
