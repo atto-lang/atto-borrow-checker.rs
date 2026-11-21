@@ -9,6 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 pub mod actor_arena_ref32_v1;
+pub mod actor_ref32_v1;
 pub mod actor_state_guard_v1;
 pub mod actor_state_runtime_v1;
 /// Named lt! a binders and inferred lexical argument-borrow region checks.
