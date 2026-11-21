@@ -46,6 +46,10 @@ fn main() -> ExitCode {
         }
     };
     match analyze_manifest(&data) {
+        Ok(report) if report.functions.is_empty() => {
+            eprintln!("INDEPENDENT_SSA_REJECT E_NO_FUNCTIONS");
+            ExitCode::from(1)
+        }
         Ok(report) => {
             for function in report.functions {
                 println!(
