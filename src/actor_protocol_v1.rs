@@ -172,7 +172,8 @@ fn checked_protocols(program: &Program) -> Result<BTreeMap<&str, &Protocol>, Dia
         if p.name.is_empty() || p.states.is_empty() || p.states.len() > 64
             || !p.states.contains(&p.initial) || p.terminal.is_empty()
             || !p.terminal.is_subset(&p.states) || p.terminal.contains(&p.initial)
-            || p.transitions.len() > 256 || protocols.insert(p.name.as_str(), p).is_some() {
+            || p.transitions.is_empty() || p.transitions.len() > 256
+            || protocols.insert(p.name.as_str(), p).is_some() {
             return Err(err("E_PROTOCOL_INVALID", program.entry, 0));
         }
         let mut keys = BTreeSet::new();
@@ -182,6 +183,37 @@ fn checked_protocols(program: &Program) -> Result<BTreeMap<&str, &Protocol>, Dia
                 || t.response.is_empty() || !keys.insert((&t.from, &t.message)) {
                 return Err(err("E_PROTOCOL_INVALID", program.entry, 0));
             }
+        }
+        // Match Java's source declaration preflight: reject unreachable
+        // states and states unable to reach an explicit terminal state.
+        // The graph is bounded (64 states, 256 transitions), so a finite
+        // fixed-point walk is sufficient and cannot accept a dead-end cycle.
+        let mut reachable = BTreeSet::from([p.initial.as_str()]);
+        loop {
+            let mut changed = false;
+            for t in &p.transitions {
+                if reachable.contains(t.from.as_str()) {
+                    changed |= reachable.insert(t.to.as_str());
+                }
+            }
+            if !changed { break; }
+        }
+        if reachable.len() != p.states.len() {
+            return Err(err("E_PROTOCOL_UNREACHABLE", program.entry, 0));
+        }
+
+        let mut terminating: BTreeSet<&str> = p.terminal.iter().map(String::as_str).collect();
+        loop {
+            let mut changed = false;
+            for t in &p.transitions {
+                if terminating.contains(t.to.as_str()) {
+                    changed |= terminating.insert(t.from.as_str());
+                }
+            }
+            if !changed { break; }
+        }
+        if terminating.len() != p.states.len() {
+            return Err(err("E_PROTOCOL_UNTERMINATED", program.entry, 0));
         }
     }
     Ok(protocols)

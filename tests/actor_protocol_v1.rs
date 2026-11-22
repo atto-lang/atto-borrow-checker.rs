@@ -193,3 +193,42 @@ fn old_lease_after_move_and_unreturned_owner_denied() {
     denied(program(false,vec![block(0,vec![init(),Op::Return],&[])]),
         "E_PROTOCOL_HANDLE_ESCAPE");
 }
+
+#[test]
+fn declared_state_must_be_reachable_from_initial_state() {
+    let mut p = protocol();
+    p.states.insert("Ghost".into());
+    p.transitions.push(Transition {
+        from: "Ghost".into(), message: "Wake".into(), payload: None,
+        to: "Closed".into(), mode: Mode::Unary, response: "Ack".into(),
+    });
+    let mut bad = one_request();
+    bad.protocols = vec![p];
+    denied(bad, "E_PROTOCOL_UNREACHABLE");
+}
+
+#[test]
+fn reachable_dead_end_stream_cycle_cannot_fake_terminal_progress() {
+    let mut p = protocol();
+    p.states.insert("Stalled".into());
+    p.transitions.push(Transition {
+        from: "Connected".into(), message: "Stall".into(), payload: None,
+        to: "Stalled".into(), mode: Mode::Stream, response: "Event".into(),
+    });
+    p.transitions.push(Transition {
+        from: "Stalled".into(), message: "Repeat".into(), payload: None,
+        to: "Stalled".into(), mode: Mode::Stream, response: "Event".into(),
+    });
+    let mut bad = one_request();
+    bad.protocols = vec![p];
+    denied(bad, "E_PROTOCOL_UNTERMINATED");
+}
+
+#[test]
+fn protocol_without_any_transition_is_not_complete() {
+    let mut p = protocol();
+    p.transitions.clear();
+    let mut bad = one_request();
+    bad.protocols = vec![p];
+    denied(bad, "E_PROTOCOL_INVALID");
+}
