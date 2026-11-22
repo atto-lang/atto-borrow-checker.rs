@@ -12,6 +12,7 @@ pub type PlaceId = u32;
 pub type ProtocolId = u16;
 pub type StateId = u16;
 pub type LoanId = u32;
+pub type PendingId = u32;
 pub type BlockId = u32;
 
 const MAX_PROTOCOLS: usize = 64;
@@ -19,6 +20,7 @@ const MAX_STATES: usize = 128;
 const MAX_METHODS: usize = 256;
 const MAX_PLACES: usize = 64;
 const MAX_LOANS: usize = 1024;
+const MAX_PENDING: usize = 256;
 const MAX_BLOCKS: usize = 4096;
 const MAX_EDGES: usize = 16_384;
 const MAX_OPS_PER_BLOCK: usize = 1024;
@@ -47,6 +49,15 @@ pub struct State {
     pub cleanup: Cleanup,
 }
 
+/// Authenticated failure/timeout/cancellation states. The model cannot itself
+/// authenticate contracts or certify real async cleanup in emitted guest code.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AsyncOutcomes {
+    pub on_error: StateId,
+    pub on_timeout: StateId,
+    pub on_cancel: StateId,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Method {
     pub name: String,
@@ -57,6 +68,8 @@ pub struct Method {
     pub access: Access,
     /// Derived from an authenticated suspension effect on the resolved callable.
     pub suspends: bool,
+    /// Required precisely for a suspension-marked, state-changing method.
+    pub async_outcomes: Option<AsyncOutcomes>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -88,6 +101,11 @@ pub enum Op {
     AwaitCall { place: PlaceId, method: String },
     /// Awaited, state-preserving exclusive operation; no in-flight state changes.
     AwaitCallMut { place: PlaceId, method: String },
+    /// Begins an exclusive async operation and consumes its source owner.
+    BeginAsync { from: PlaceId, pending: PendingId, method: String },
+    /// Last operation of a 4-way branch with ordered successors:
+    /// [success, error, timeout, cancellation]. Exactly one outcome settles.
+    AwaitPending { pending: PendingId, into: PlaceId },
     /// Suspension unrelated to a resource operation; resource owner stays live.
     Suspend,
     Borrow { place: PlaceId, loan: LoanId, kind: BorrowKind },
@@ -140,10 +158,33 @@ struct Loan {
     kind: BorrowKind,
 }
 
+/// Sole owner of a pending operation until its outcome edge settles.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct Pending {
+    protocol: ProtocolId,
+    success: StateId,
+    error: StateId,
+    timeout: StateId,
+    cancel: StateId,
+}
+
+impl Pending {
+    fn state_for_edge(&self, edge: usize) -> StateId {
+        match edge {
+            0 => self.success,
+            1 => self.error,
+            2 => self.timeout,
+            3 => self.cancel,
+            _ => unreachable!("validated four-way outcome"),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct Facts {
     places: BTreeMap<PlaceId, Fact>,
     loans: BTreeMap<LoanId, Loan>,
+    pending: BTreeMap<PendingId, Pending>,
 }
 
 /// A proof over the exact submitted *acyclic* operation graph only.
@@ -178,6 +219,11 @@ fn checked_protocols(protocols: &[Protocol]) -> Result<BTreeMap<ProtocolId, &Pro
                 || method.from.len() > MAX_STATES || method.from.iter().any(|s| !states.contains(s))
                 || method.to.is_some_and(|s| !states.contains(&s))
                 || (method.to.is_some() && method.access != Access::Exclusive)
+                || (method.async_outcomes.is_some() != (method.suspends && method.to.is_some()))
+                || method.async_outcomes.as_ref().is_some_and(|outcomes|
+                    !states.contains(&outcomes.on_error)
+                    || !states.contains(&outcomes.on_timeout)
+                    || !states.contains(&outcomes.on_cancel))
             {
                 return Err(err("E_TYPESTATE_INVALID_PROTOCOL", 0, 0));
             }
@@ -197,6 +243,7 @@ fn graph(program: &Program) -> Result<(BTreeMap<BlockId, &Block>, Vec<BlockId>, 
     let mut edges = 0usize;
     let mut total = 0usize;
     let mut issued_loans = BTreeSet::new();
+    let mut issued_pending = BTreeSet::new();
     for block in &program.blocks {
         edges = edges.saturating_add(block.successors.len());
         total = total.saturating_add(block.ops.len());
@@ -221,6 +268,16 @@ fn graph(program: &Program) -> Result<(BTreeMap<BlockId, &Block>, Vec<BlockId>, 
                 if !issued_loans.insert(*loan) || issued_loans.len() > MAX_LOANS {
                     return Err(err("E_TYPESTATE_LOAN_ID", block.id, i));
                 }
+            }
+            if let Op::BeginAsync { pending, .. } = op {
+                if !issued_pending.insert(*pending) || issued_pending.len() > MAX_PENDING {
+                    return Err(err("E_TYPESTATE_PENDING_ID", block.id, i));
+                }
+            }
+            if matches!(op, Op::AwaitPending { .. })
+                && (i + 1 != block.ops.len() || block.successors.len() != 4)
+            {
+                return Err(err("E_TYPESTATE_ASYNC_EDGE_SHAPE", block.id, i));
             }
         }
     }
@@ -266,9 +323,12 @@ fn graph(program: &Program) -> Result<(BTreeMap<BlockId, &Block>, Vec<BlockId>, 
 }
 
 fn join(into: &mut Facts, rhs: &Facts, block: BlockId) -> Result<(), Diagnostic> {
-    // Divergent live loan provenance cannot be silently merged.
+    // Divergent loan or pending escrow provenance cannot be silently merged.
     if into.loans != rhs.loans {
         return Err(err("E_TYPESTATE_LOAN_JOIN", block, 0));
+    }
+    if into.pending != rhs.pending {
+        return Err(err("E_TYPESTATE_PENDING_JOIN", block, 0));
     }
     let ids: BTreeSet<_> = into.places.keys().chain(rhs.places.keys()).copied().collect();
     for id in ids {
