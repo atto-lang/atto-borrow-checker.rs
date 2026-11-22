@@ -14,6 +14,11 @@ pub mod actor_state_runtime_v1;
 /// Named lt! a binders and inferred lexical argument-borrow region checks.
 /// Separate V1 type model; not a replacement for full MIR lifetime lowering.
 pub mod lifetime_v1;
+/// Finite resource typestate CFG oracle; model-only, not guest certification.
+pub mod typestate_v1;
+/// Bounded source-derived actor-protocol affine handle and stream-lease CFG oracle.
+/// Independent model: no guest runtime or authenticated EOF capability.
+pub mod actor_protocol_v1;
 /// Real host-side Arc/Weak, immutable graph, and Pin<Box<T>> safety model.
 /// Native guest admission still requires independently verified compiler IR.
 pub mod runtime_capabilities_v1;
