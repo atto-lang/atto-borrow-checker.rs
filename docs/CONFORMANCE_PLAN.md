@@ -135,7 +135,7 @@ These match the existing contract vocabulary: `NOT_EXECUTED`,
 
 | Backend | Ownership engine today | Diagnostics | First step |
 |---|---|---|---|
-| **rs** (`atto-source.rs`) | `tuple_ownership_ir.rs`, `owner_arena.rs`; 6/40 BCV1 verified Rust→Wasm | already `E_MOVED` / `E_BORROW` | L3: dev-depend on this crate in tests, export MIR for BCV1 fixtures |
+| **rs** (`atto-source.rs`) | lexical checker in `src/check.rs`. **L3 exporter `src/borrow_export.rs` (straight-line-v1) built; see M1 results below** | already `E_MOVED` / `E_BORROW` | widen the profile: method-call receiver summaries, then branches once M3 lands |
 | **java** | `OwnershipChecker.java` (≈6.7k lines, AST-driven); `BorrowMirAuditV1` observer covers only straight-line Copy-parameter functions | free text | tag diagnostics with registry codes; extend the observer to emit `atto-borrow-backend-report-v1`; L2+L3 |
 | **llvm** | `OwnershipCfg.hpp` powerset lattice (joins and loops); `OwnershipChecker.cpp` | `runtime_error` strings | L1 adapter over `OwnershipCfg::Graph`; map `DropIfOwned` → `UnknownEffect` |
 | **net** | no standalone ownership module found outside tests | — | locate the checker; L2 first |
@@ -157,7 +157,7 @@ old Node tests then become redundant.
 
 ## Milestones
 
-1. **M0 (this change)**: corpus moved here and expanded to 59 cases; registry;
+1. **M0 (done, #49)**: corpus moved here and expanded to 59 cases; registry;
    strict dependency-free wire format; `atto-borrow-conform` CLI; tests.
 2. **M1 – first real cross-check**: `atto-source.rs` exports L3 reports for
    the BCV1 fixtures, and Java tags codes and exports for its straight-line
@@ -212,3 +212,42 @@ a scope ends. To export MIR faithfully:
   needed. Expect `BACKEND_STRICTER` for its conservative rejects, e.g.
   `E_BORROW` on "reborrowing a borrowed handle", which the canonical model has
   no op for. Track those as known strictness rather than failures.
+
+## M1 results: first real L3 cross-check (`atto-source.rs`, 2026-11-21)
+
+The exporter in `atto-source.rs` (atto-source.rs #513, merged; `src/borrow_export.rs`, flag
+`attoc --borrow-report`) was run over that repo's `tests/fixtures/{pass,fail}`:
+847 function records from 515 programs.
+
+| Class | Count |
+|---|---|
+| AGREE | 235 |
+| BACKEND_PERMISSIVE | **0**: no unsound accept found |
+| CODE_MISMATCH | 0 |
+| BACKEND_STRICTER | 2 |
+| NON_OWNERSHIP_REJECT | 273 |
+| NOT_EXPORTED | 337 |
+
+- **BACKEND_STRICTER:** both are real compiler limits that the canonical model
+  allows: mutable scalar loans (`fail/168`) and borrowing a temporary
+  (`fail/170`).
+- **NOT_EXPORTED:** branches (159), class/actor bodies (60), loops (45) and
+  method calls (27) dominate. This is the coverage case for M3.
+- **The first run found five adapter defects**, not compiler bugs. Moving a
+  loan binder was exported as a `Move` of a nonexistent owner, and
+  expression-level `borrow!` omitted its `Borrow`. All five are fixed and have
+  golden tests. A wrong mapping showing up as `CODE_MISMATCH` instead of being
+  silently trusted is the L3 design working as intended.
+- **BCV1** gives 10 AGREE, 31 non-ownership rejects and 1 not-exported record.
+  Only about 9 of the 40 fixtures reach the ownership checker on main.
+
+**Finding for L2, not L3:** atto-source.rs main moves class arguments on an
+ordinary call (`args()` → `consume()`). BCV1-003 therefore rejects with
+`E_MOVED`, contrary to implicit-argument-borrow-v1. The published BCV1
+receipts were produced by draft PR #347's borrow-default profile, which is
+not on main. L3 agrees, correctly, because it checks that the export matches
+what this compiler actually decided, not the spec.
+
+Also note that `cargo test` on atto-source.rs main does not compile: several
+`tests/*.rs` still `use oreslang_source_rs`. Per-target runs are needed
+until that is fixed.
