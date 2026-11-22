@@ -38,10 +38,10 @@ jobs:
       - name: Compile, lint, and execute actual Rust protocol CFG tests
         run: |
           set -euo pipefail
-          cargo fmt --all -- --check
-          cargo clippy --all-targets --locked -- -D warnings
           cargo test --test actor_protocol_v1 --locked
           cargo test --test actor_protocol_v1 --locked --release
+          cargo fmt --all -- --check
+          cargo clippy --all-targets --locked -- -D warnings
           echo 'ATTO_ACTOR_PROTOCOL_RUST_MODEL=PASS'
           echo 'ATTO_ACTOR_PROTOCOL_GUEST=NOT_EXECUTED'
           echo 'ATTO_ACTOR_PROTOCOL_CANONICAL_COMPILER_ADAPTER=NOT_VERIFIED'
