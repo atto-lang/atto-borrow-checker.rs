@@ -9,9 +9,9 @@ fn resource(name: &str, policy: Cleanup) -> Protocol {
             State { id: 1, name: "Closed".into(), cleanup: Cleanup::Inert },
         ],
         methods: vec![
-            Method { name: "send".into(), from: vec![0], to: None, access: Access::Read, suspends: false },
-            Method { name: "close".into(), from: vec![0], to: Some(1), access: Access::Exclusive, suspends: false },
-            Method { name: "is_closed".into(), from: vec![0, 1], to: None, access: Access::Read, suspends: false },
+            Method { name: "send".into(), from: vec![0], to: None, access: Access::Read, suspends: false, async_outcomes: None },
+            Method { name: "close".into(), from: vec![0], to: Some(1), access: Access::Exclusive, suspends: false, async_outcomes: None },
+            Method { name: "is_closed".into(), from: vec![0, 1], to: None, access: Access::Read, suspends: false, async_outcomes: None },
         ],
     }
 }
