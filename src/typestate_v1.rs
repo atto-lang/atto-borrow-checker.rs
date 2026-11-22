@@ -76,7 +76,10 @@ pub enum Op {
     /// A typed constructor/reinitialization, never a dynamic unchecked cast.
     Init { place: PlaceId, protocol: ProtocolId, state: StateId },
     /// An operation on the owner itself (the adapter must prove receiver rights).
+    /// Read-only receiver access; cannot execute state-changing methods.
     Call { place: PlaceId, method: String },
+    /// A separately typechecked exclusive `mut` owning receiver.
+    CallMut { place: PlaceId, method: String },
     /// An operation through the exact checked loan.
     CallThrough { loan: LoanId, method: String },
     Borrow { place: PlaceId, loan: LoanId, kind: BorrowKind },
@@ -294,7 +297,8 @@ fn can_release(fact: &Fact, protocol: &Protocol) -> bool {
 }
 
 fn apply_method(facts: &mut Facts, protocols: &BTreeMap<ProtocolId, &Protocol>,
-    place: PlaceId, method_name: &str, through: Option<BorrowKind>, block: BlockId, i: usize) -> Result<(), Diagnostic> {
+    place: PlaceId, method_name: &str, through: Option<BorrowKind>,
+    receiver: Access, block: BlockId, i: usize) -> Result<(), Diagnostic> {
     let fact = live(facts, place, block, i)?;
     let protocol = protocols[&fact.protocol];
     let method = protocol.methods.iter().find(|m| m.name == method_name)
@@ -302,12 +306,12 @@ fn apply_method(facts: &mut Facts, protocols: &BTreeMap<ProtocolId, &Protocol>,
     if fact.states.iter().flatten().any(|s| !method.from.contains(s)) {
         return Err(err("E_TYPESTATE_ILLEGAL_OPERATION", block, i));
     }
-    if method.access == Access::Exclusive && through == Some(BorrowKind::Shared) {
+    if method.access == Access::Exclusive && receiver != Access::Exclusive {
         return Err(err("E_TYPESTATE_MUT_BORROW_REQUIRED", block, i));
     }
     let loans: Vec<_> = facts.loans.values().filter(|loan| loan.place == place).collect();
-    if through.is_none() && (method.access == Access::Exclusive && !loans.is_empty()
-        || method.access == Access::Read && loans.iter().any(|loan| loan.kind == BorrowKind::Mutable)) {
+    if through.is_none() && (receiver == Access::Exclusive && !loans.is_empty()
+        || receiver == Access::Read && loans.iter().any(|loan| loan.kind == BorrowKind::Mutable)) {
         return Err(err("E_TYPESTATE_LOAN_CONFLICT", block, i));
     }
     if let Some(to) = method.to {
@@ -346,11 +350,15 @@ pub fn verify(program: &Program) -> Result<Proof, Diagnostic> {
                     }
                 }
                 Op::Call { place, method } => {
-                    apply_method(&mut facts, &protocols, *place, method, None, id, i)?;
+                    apply_method(&mut facts, &protocols, *place, method, None, Access::Read, id, i)?;
+                }
+                Op::CallMut { place, method } => {
+                    apply_method(&mut facts, &protocols, *place, method, None, Access::Exclusive, id, i)?;
                 }
                 Op::CallThrough { loan, method } => {
                     let source = *facts.loans.get(loan).ok_or_else(|| err("E_TYPESTATE_UNKNOWN_LOAN", id, i))?;
-                    apply_method(&mut facts, &protocols, source.place, method, Some(source.kind), id, i)?;
+                    let mode = if source.kind == BorrowKind::Mutable { Access::Exclusive } else { Access::Read };
+                    apply_method(&mut facts, &protocols, source.place, method, Some(source.kind), mode, id, i)?;
                 }
                 Op::Borrow { place, loan, kind } => {
                     live(&facts, *place, id, i)?;
