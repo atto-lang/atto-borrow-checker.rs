@@ -13,7 +13,10 @@ fn init(state: StateId) -> Op {
 }
 
 fn call(method: &str) -> Op {
-    Op::Call { place: 1, method: method.into() }
+    match method {
+        "connect" | "close" | "append" | "finish" => Op::CallMut { place: 1, method: method.into() },
+        _ => Op::Call { place: 1, method: method.into() },
+    }
 }
 
 fn socket() -> Protocol {
