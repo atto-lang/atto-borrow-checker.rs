@@ -3,8 +3,15 @@ on:
   pull_request:
     paths:
       - 'src/actor_protocol_v1.rs'
+      - 'src/typestate_v1.rs'
       - 'src/lib.rs'
       - 'tests/actor_protocol_v1.rs'
+      - 'tests/typestate_v1.rs'
+      - 'tests/typestate_pending_v1.rs'
+      - 'tests/typestate_resource_profiles_v1.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
       - '.github/workflows/actor-protocol-cfg-native-v1.yml'
   workflow_dispatch:
 permissions:
@@ -12,7 +19,7 @@ permissions:
 jobs:
   canonical-protocol-cfg:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -26,7 +33,13 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$HEAD_SHA"
           test -z "$(git status --porcelain)"
-          for source in src/actor_protocol_v1.rs tests/actor_protocol_v1.rs; do
+          for source in \
+            src/actor_protocol_v1.rs \
+            src/typestate_v1.rs \
+            tests/actor_protocol_v1.rs \
+            tests/typestate_v1.rs \
+            tests/typestate_pending_v1.rs \
+            tests/typestate_resource_profiles_v1.rs; do
             test "$(git rev-parse HEAD:"$source")" = "$(git hash-object --no-filters "$source")"
           done
           echo "ATTO_RUST_PROTOCOL_EXACT_COMMIT=$HEAD_SHA"
@@ -35,13 +48,15 @@ jobs:
         with:
           toolchain: '1.99.1'
           components: clippy,rustfmt
-      - name: Compile, lint, and execute actual Rust protocol CFG tests
+      - name: Format, lint, and execute all native typestate and actor protocol tests
         run: |
           set -euo pipefail
-          cargo test --test actor_protocol_v1 --locked
-          cargo test --test actor_protocol_v1 --locked --release
+          rustc --version
+          cargo --version
           cargo fmt --all -- --check
           cargo clippy --all-targets --locked -- -D warnings
+          cargo test --all-targets --locked
+          cargo test --all-targets --locked --release
           echo 'ATTO_ACTOR_PROTOCOL_RUST_MODEL=PASS'
           echo 'ATTO_ACTOR_PROTOCOL_GUEST=NOT_EXECUTED'
           echo 'ATTO_ACTOR_PROTOCOL_CANONICAL_COMPILER_ADAPTER=NOT_VERIFIED'
