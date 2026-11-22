@@ -9,9 +9,9 @@ fn resource(name: &str, policy: Cleanup) -> Protocol {
             State { id: 1, name: "Closed".into(), cleanup: Cleanup::Inert },
         ],
         methods: vec![
-            Method { name: "send".into(), from: vec![0], to: None, access: Access::Read },
-            Method { name: "close".into(), from: vec![0], to: Some(1), access: Access::Exclusive },
-            Method { name: "is_closed".into(), from: vec![0, 1], to: None, access: Access::Read },
+            Method { name: "send".into(), from: vec![0], to: None, access: Access::Read , suspends: false },
+            Method { name: "close".into(), from: vec![0], to: Some(1), access: Access::Exclusive , suspends: false },
+            Method { name: "is_closed".into(), from: vec![0, 1], to: None, access: Access::Read , suspends: false },
         ],
     }
 }
@@ -23,8 +23,8 @@ fn call(place: PlaceId, method: &str) -> Op {
         _ => Op::Call { place, method: method.into() },
     }
 }
-fn program(ops: Vec<Op>) -> Program {
-    Program { entry: 0, protocols: vec![resource("File", Cleanup::VerifiedDestructor)],
+fn program(ops: Vec<Op>) -> Program { suspending: false,
+    Program { suspending: false, entry: 0, protocols: vec![resource("File", Cleanup::VerifiedDestructor)],
         blocks: vec![Block { id: 0, ops, successors: vec![] }] }
 }
 fn fails(p: Program, code: &str) {
@@ -156,4 +156,53 @@ fn loan_identity_and_resource_budget_are_checked() {
     fails(p.clone(), "E_TYPESTATE_LOAN_ID");
     p.blocks[0].ops = (1..=65).map(|place| Op::Init { place, protocol: 1, state: 0 }).chain([Op::Return]).collect();
     fails(p, "E_TYPESTATE_PLACE_BUDGET");
+}
+
+/// A source compiler must never lower a suspending I/O method as plain Call.
+#[test]
+fn async_io_requires_await_and_susp_callable_context() {
+    let mut p = program(vec![init(), call(1, "send"), Op::Return]);
+    p.protocols[0].methods[0].suspends = true;
+    fails(p.clone(), "E_TYPESTATE_AWAIT_REQUIRED");
+
+    p.blocks[0].ops[1] = Op::AwaitCall { place: 1, method: "send".into() };
+    fails(p.clone(), "E_TYPESTATE_AWAIT_CONTEXT");
+    p.suspending = true;
+    assert!(verify(&p).is_ok(), "awaited state-preserving I/O can retain owner");
+
+    p.protocols[0].methods[0].suspends = false;
+    fails(p, "E_TYPESTATE_NOT_SUSPENDING");
+}
+
+#[test]
+fn await_preserves_live_owner_but_rejects_unsafe_loan() {
+    let mut p = program(vec![init(), Op::Suspend, call(1, "send"), Op::Return]);
+    p.suspending = true;
+    assert!(verify(&p).is_ok(), "suspension must not consume or close the owner");
+
+    p.blocks[0].ops.insert(1, Op::Borrow { place: 1, loan: 1, kind: BorrowKind::Shared });
+    fails(p.clone(), "E_TYPESTATE_SUSPEND_LOAN");
+    // Only a fully ended loan can precede the independent suspension.
+    p.blocks[0].ops = vec![init(),
+        Op::Borrow { place: 1, loan: 1, kind: BorrowKind::Shared },
+        Op::EndBorrow { loan: 1 }, Op::Suspend, call(1, "send"), Op::Return];
+    assert!(verify(&p).is_ok());
+}
+
+#[test]
+fn async_close_cannot_pretend_success_without_pending_ownership_model() {
+    let mut p = program(vec![init(), Op::AwaitCallMut { place: 1, method: "close".into() }, Op::Return]);
+    p.suspending = true;
+    p.protocols[0].methods[1].suspends = true;
+    fails(p.clone(), "E_TYPESTATE_ASYNC_TRANSITION_UNSUPPORTED");
+    p.blocks[0].ops[1] = call(1, "close");
+    fails(p, "E_TYPESTATE_AWAIT_REQUIRED");
+}
+
+#[test]
+fn suspended_program_cannot_reuse_owner_after_explicit_transfer() {
+    let mut p = program(vec![init(), Op::Take { from: 1, into: 2 },
+        Op::Suspend, call(1, "send"), Op::Return]);
+    p.suspending = true;
+    fails(p, "E_TYPESTATE_NOT_LIVE");
 }
