@@ -9,9 +9,9 @@ fn resource(name: &str, policy: Cleanup) -> Protocol {
             State { id: 1, name: "Closed".into(), cleanup: Cleanup::Inert },
         ],
         methods: vec![
-            Method { name: "send".into(), from: vec![0], to: None, access: Access::Read , suspends: false },
-            Method { name: "close".into(), from: vec![0], to: Some(1), access: Access::Exclusive , suspends: false },
-            Method { name: "is_closed".into(), from: vec![0, 1], to: None, access: Access::Read , suspends: false },
+            Method { name: "send".into(), from: vec![0], to: None, access: Access::Read, suspends: false },
+            Method { name: "close".into(), from: vec![0], to: Some(1), access: Access::Exclusive, suspends: false },
+            Method { name: "is_closed".into(), from: vec![0, 1], to: None, access: Access::Read, suspends: false },
         ],
     }
 }
@@ -23,7 +23,7 @@ fn call(place: PlaceId, method: &str) -> Op {
         _ => Op::Call { place, method: method.into() },
     }
 }
-fn program(ops: Vec<Op>) -> Program { suspending: false,
+fn program(ops: Vec<Op>) -> Program {
     Program { suspending: false, entry: 0, protocols: vec![resource("File", Cleanup::VerifiedDestructor)],
         blocks: vec![Block { id: 0, ops, successors: vec![] }] }
 }
