@@ -43,9 +43,6 @@ fn await_close() -> Op {
 fn read(place: PlaceId) -> Op {
     Op::Call { place, method: "read".into() }
 }
-fn ret() -> Block {
-    Block { id: 999, ops: vec![Op::Return], successors: vec![] }
-}
 fn branches() -> Program {
     Program {
         entry: 0,
