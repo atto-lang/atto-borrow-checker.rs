@@ -217,3 +217,36 @@ fn unrelated_second_begin_is_denied_while_escrow_is_pending() {
     });
     error(p, "E_TYPESTATE_PENDING_CONFLICT");
 }
+
+#[test]
+fn cancellation_state_must_be_safe_independently_of_timeout_state() {
+    let mut p = rollback_contract(branches());
+    p.protocols[0].methods[0].async_outcomes.as_mut().unwrap().on_cancel = 2;
+    error(p, "E_TYPESTATE_INCOMPLETE");
+
+    let mut p = rollback_contract(branches());
+    p.protocols[0].methods[0].async_outcomes.as_mut().unwrap().on_timeout = 2;
+    error(p, "E_TYPESTATE_INCOMPLETE");
+}
+
+#[test]
+fn async_begin_rejects_uninitialized_source_and_non_transition_method() {
+    let mut p = rollback_contract(branches());
+    p.blocks[0].ops.remove(0);
+    error(p, "E_TYPESTATE_NOT_LIVE");
+
+    let mut p = rollback_contract(branches());
+    p.blocks[0].ops[1] = Op::BeginAsync {
+        from: 1, pending: 42, method: "read".into(),
+    };
+    error(p, "E_TYPESTATE_NOT_SUSPENDING");
+}
+
+#[test]
+fn live_mutable_loan_is_not_a_cancellation_safe_async_authority() {
+    let mut p = rollback_contract(branches());
+    p.blocks[0].ops.insert(1, Op::Borrow {
+        place: 1, loan: 7, kind: BorrowKind::Mutable,
+    });
+    error(p, "E_TYPESTATE_SUSPEND_LOAN");
+}
