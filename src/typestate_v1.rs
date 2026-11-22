@@ -55,6 +55,8 @@ pub struct Method {
     /// None means a state-preserving operation; Some changes typestate.
     pub to: Option<StateId>,
     pub access: Access,
+    /// Derived from an authenticated suspension effect on the resolved callable.
+    pub suspends: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -82,6 +84,12 @@ pub enum Op {
     CallMut { place: PlaceId, method: String },
     /// An operation through the exact checked loan.
     CallThrough { loan: LoanId, method: String },
+    /// Awaited, state-preserving read from a suspension-marked method.
+    AwaitCall { place: PlaceId, method: String },
+    /// Awaited, state-preserving exclusive operation; no in-flight state changes.
+    AwaitCallMut { place: PlaceId, method: String },
+    /// Suspension unrelated to a resource operation; resource owner stays live.
+    Suspend,
     Borrow { place: PlaceId, loan: LoanId, kind: BorrowKind },
     EndBorrow { loan: LoanId },
     /// Consuming `take!` transfers typestate to a *distinct* place.
@@ -102,6 +110,8 @@ pub struct Block {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Program {
     pub entry: BlockId,
+    /// Authenticated callable suspension effect, not inferred from an await op.
+    pub suspending: bool,
     pub protocols: Vec<Protocol>,
     pub blocks: Vec<Block>,
 }
@@ -298,11 +308,25 @@ fn can_release(fact: &Fact, protocol: &Protocol) -> bool {
 
 fn apply_method(facts: &mut Facts, protocols: &BTreeMap<ProtocolId, &Protocol>,
     place: PlaceId, method_name: &str, through: Option<BorrowKind>,
-    receiver: Access, block: BlockId, i: usize) -> Result<(), Diagnostic> {
+    receiver: Access, awaited: bool, block: BlockId, i: usize) -> Result<(), Diagnostic> {
     let fact = live(facts, place, block, i)?;
     let protocol = protocols[&fact.protocol];
     let method = protocol.methods.iter().find(|m| m.name == method_name)
         .ok_or_else(|| err("E_TYPESTATE_UNKNOWN_METHOD", block, i))?;
+    if method.suspends && !awaited {
+        return Err(err("E_TYPESTATE_AWAIT_REQUIRED", block, i));
+    }
+    if !method.suspends && awaited {
+        return Err(err("E_TYPESTATE_NOT_SUSPENDING", block, i));
+    }
+    // Awaited state-changing calls need an explicit escrow and outcome CFG.
+    // V1 must not pretend that a fallible or cancelled close has succeeded.
+    if awaited && method.to.is_some() {
+        return Err(err("E_TYPESTATE_ASYNC_TRANSITION_UNSUPPORTED", block, i));
+    }
+    if awaited && !facts.loans.is_empty() {
+        return Err(err("E_TYPESTATE_SUSPEND_LOAN", block, i));
+    }
     if fact.states.iter().flatten().any(|s| !method.from.contains(s)) {
         return Err(err("E_TYPESTATE_ILLEGAL_OPERATION", block, i));
     }
@@ -350,15 +374,38 @@ pub fn verify(program: &Program) -> Result<Proof, Diagnostic> {
                     }
                 }
                 Op::Call { place, method } => {
-                    apply_method(&mut facts, &protocols, *place, method, None, Access::Read, id, i)?;
+                    apply_method(&mut facts, &protocols, *place, method, None, Access::Read, false, id, i)?;
                 }
                 Op::CallMut { place, method } => {
-                    apply_method(&mut facts, &protocols, *place, method, None, Access::Exclusive, id, i)?;
+                    apply_method(&mut facts, &protocols, *place, method, None, Access::Exclusive, false, id, i)?;
                 }
                 Op::CallThrough { loan, method } => {
                     let source = *facts.loans.get(loan).ok_or_else(|| err("E_TYPESTATE_UNKNOWN_LOAN", id, i))?;
                     let mode = if source.kind == BorrowKind::Mutable { Access::Exclusive } else { Access::Read };
-                    apply_method(&mut facts, &protocols, source.place, method, Some(source.kind), mode, id, i)?;
+                    apply_method(&mut facts, &protocols, source.place, method, Some(source.kind), mode, false, id, i)?;
+                }
+                Op::AwaitCall { place, method } | Op::AwaitCallMut { place, method } => {
+                    if !program.suspending {
+                        return Err(err("E_TYPESTATE_AWAIT_CONTEXT", id, i));
+                    }
+                    // V1 cannot infer pinned, cancellation-safe loan lifetimes.
+                    if !facts.loans.is_empty() {
+                        return Err(err("E_TYPESTATE_SUSPEND_LOAN", id, i));
+                    }
+                    let mode = if matches!(op, Op::AwaitCallMut { .. }) {
+                        Access::Exclusive
+                    } else {
+                        Access::Read
+                    };
+                    apply_method(&mut facts, &protocols, *place, method, None, mode, true, id, i)?;
+                }
+                Op::Suspend => {
+                    if !program.suspending {
+                        return Err(err("E_TYPESTATE_AWAIT_CONTEXT", id, i));
+                    }
+                    if !facts.loans.is_empty() {
+                        return Err(err("E_TYPESTATE_SUSPEND_LOAN", id, i));
+                    }
                 }
                 Op::Borrow { place, loan, kind } => {
                     live(&facts, *place, id, i)?;
