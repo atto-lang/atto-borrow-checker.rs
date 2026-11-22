@@ -416,6 +416,7 @@ pub fn verify(program: &Program) -> Result<Proof, Diagnostic> {
     for id in order {
         let block = blocks[&id];
         let mut facts = incoming.remove(&id).ok_or_else(|| err("E_TYPESTATE_INVALID_CFG", id, 0))?;
+        let mut split: Option<(PendingId, PlaceId)> = None;
         for (i, op) in block.ops.iter().enumerate() {
             match op {
                 Op::Init { place, protocol, state } => {
@@ -458,6 +459,61 @@ pub fn verify(program: &Program) -> Result<Proof, Diagnostic> {
                         Access::Read
                     };
                     apply_method(&mut facts, &protocols, *place, method, None, mode, true, id, i)?;
+                }
+                Op::BeginAsync { from, pending, method } => {
+                    if !program.suspending {
+                        return Err(err("E_TYPESTATE_AWAIT_CONTEXT", id, i));
+                    }
+                    if !facts.pending.is_empty() {
+                        return Err(err("E_TYPESTATE_PENDING_CONFLICT", id, i));
+                    }
+                    let source = live(&facts, *from, id, i)?.clone();
+                    if !facts.loans.is_empty() {
+                        return Err(err("E_TYPESTATE_SUSPEND_LOAN", id, i));
+                    }
+                    let protocol = protocols[&source.protocol];
+                    let signature = protocol.methods.iter().find(|m| m.name == *method)
+                        .ok_or_else(|| err("E_TYPESTATE_UNKNOWN_METHOD", id, i))?;
+                    if !signature.suspends {
+                        return Err(err("E_TYPESTATE_NOT_SUSPENDING", id, i));
+                    }
+                    if signature.access != Access::Exclusive || signature.to.is_none() {
+                        return Err(err("E_TYPESTATE_ASYNC_CONTRACT", id, i));
+                    }
+                    if source.states.iter().flatten().any(|state| !signature.from.contains(state)) {
+                        return Err(err("E_TYPESTATE_ILLEGAL_OPERATION", id, i));
+                    }
+                    let outcomes = signature.async_outcomes.as_ref()
+                        .ok_or_else(|| err("E_TYPESTATE_ASYNC_CONTRACT", id, i))?;
+                    facts.pending.insert(*pending, Pending {
+                        protocol: source.protocol,
+                        success: signature.to.expect("validated transition"),
+                        error: outcomes.on_error,
+                        timeout: outcomes.on_timeout,
+                        cancel: outcomes.on_cancel,
+                    });
+                    // take! consumes old owner *before* suspension.
+                    facts.places.get_mut(from).expect("checked live owner").states = BTreeSet::from([None]);
+                }
+                Op::AwaitPending { pending, into } => {
+                    if !program.suspending {
+                        return Err(err("E_TYPESTATE_AWAIT_CONTEXT", id, i));
+                    }
+                    let escrow = facts.pending.get(pending)
+                        .ok_or_else(|| err("E_TYPESTATE_UNKNOWN_PENDING", id, i))?;
+                    if !facts.loans.is_empty() {
+                        return Err(err("E_TYPESTATE_SUSPEND_LOAN", id, i));
+                    }
+                    if let Some(target) = facts.places.get(into) {
+                        if target.protocol != escrow.protocol
+                            || target.states != BTreeSet::from([None]) {
+                            return Err(err("E_TYPESTATE_TARGET_LIVE", id, i));
+                        }
+                    }
+                    if facts.places.len() >= MAX_PLACES && !facts.places.contains_key(into) {
+                        return Err(err("E_TYPESTATE_PLACE_BUDGET", id, i));
+                    }
+                    split = Some((*pending, *into));
                 }
                 Op::Suspend => {
                     if !program.suspending {
@@ -509,17 +565,30 @@ pub fn verify(program: &Program) -> Result<Proof, Diagnostic> {
                 }
                 Op::Return => {
                     if !facts.loans.is_empty() { return Err(err("E_TYPESTATE_LOAN_ESCAPE", id, i)); }
+                    if !facts.pending.is_empty() { return Err(err("E_TYPESTATE_PENDING_ESCAPE", id, i)); }
                     if facts.places.values().any(|f| !can_release(f, protocols[&f.protocol])) {
                         return Err(err("E_TYPESTATE_INCOMPLETE", id, i));
                     }
                 }
             }
         }
-        for target in &block.successors {
+        // Each labelled result edge settles the escrow exactly once. Four
+        // distinct successor blocks are required by graph validation. The
+        // source remains moved on every edge, including cancellation.
+        for (edge_index, target) in block.successors.iter().enumerate() {
+            let mut outgoing = facts.clone();
+            if let Some((pending_id, into)) = split {
+                let escrow = outgoing.pending.remove(&pending_id)
+                    .ok_or_else(|| err("E_TYPESTATE_UNKNOWN_PENDING", id, block.ops.len()))?;
+                outgoing.places.insert(into, Fact {
+                    protocol: escrow.protocol,
+                    states: BTreeSet::from([Some(escrow.state_for_edge(edge_index))]),
+                });
+            }
             if let Some(existing) = incoming.get_mut(target) {
-                join(existing, &facts, *target)?;
+                join(existing, &outgoing, *target)?;
             } else {
-                incoming.insert(*target, facts.clone());
+                incoming.insert(*target, outgoing);
             }
         }
     }
