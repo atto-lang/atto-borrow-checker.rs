@@ -17,7 +17,12 @@ fn resource(name: &str, policy: Cleanup) -> Protocol {
 }
 
 fn init() -> Op { Op::Init { place: 1, protocol: 1, state: 0 } }
-fn call(place: PlaceId, method: &str) -> Op { Op::Call { place, method: method.into() } }
+fn call(place: PlaceId, method: &str) -> Op {
+    match method {
+        "close" => Op::CallMut { place, method: method.into() },
+        _ => Op::Call { place, method: method.into() },
+    }
+}
 fn program(ops: Vec<Op>) -> Program {
     Program { entry: 0, protocols: vec![resource("File", Cleanup::VerifiedDestructor)],
         blocks: vec![Block { id: 0, ops, successors: vec![] }] }
@@ -32,6 +37,12 @@ fn open_send_close_and_return_is_valid_without_runtime_state_tests() {
     let p = program(vec![init(), call(1, "send"), call(1, "close"), Op::Return]);
     assert_eq!(verify(&p).unwrap(), Proof { verified_blocks: 1, verified_operations: 4 });
 }
+#[test]
+fn readonly_owner_cannot_call_state_changing_method() {
+    fails(program(vec![init(), Op::Call { place: 1, method: "close".into() }, Op::Return]),
+        "E_TYPESTATE_MUT_BORROW_REQUIRED");
+}
+
 #[test]
 fn double_close_is_rejected() {
     fails(program(vec![init(), call(1, "close"), call(1, "close"), Op::Return]), "E_TYPESTATE_ILLEGAL_OPERATION");
