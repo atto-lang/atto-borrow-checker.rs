@@ -194,6 +194,9 @@ fn async_close_cannot_pretend_success_without_pending_ownership_model() {
     let mut p = program(vec![init(), Op::AwaitCallMut { place: 1, method: "close".into() }, Op::Return]);
     p.suspending = true;
     p.protocols[0].methods[1].suspends = true;
+    p.protocols[0].methods[1].async_outcomes = Some(AsyncOutcomes {
+        on_error: 0, on_timeout: 0, on_cancel: 0,
+    });
     fails(p.clone(), "E_TYPESTATE_ASYNC_TRANSITION_UNSUPPORTED");
     p.blocks[0].ops[1] = call(1, "close");
     fails(p, "E_TYPESTATE_AWAIT_REQUIRED");
