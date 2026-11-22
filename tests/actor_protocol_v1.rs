@@ -170,6 +170,21 @@ fn cycles_unreachable_and_implicit_exit_denied() {
         "E_PROTOCOL_CFG_UNREACHABLE");
 }
 #[test]
+fn single_result_abi_denies_multiple_returned_capabilities() {
+    denied(program(false,vec![block(0,vec![
+        init(),Op::Init { place:2,protocol:"Connection".into() },
+        Op::ReturnHandle { place:1 },Op::ReturnHandle { place:2 },Op::Return
+    ],&[])]),"E_PROTOCOL_MULTIPLE_RETURN_HANDLES");
+}
+#[test]
+fn branch_join_requires_matching_returned_handle_count() {
+    denied(program(false,vec![
+        block(0,vec![init()],&[1,2]),
+        block(1,vec![Op::ReturnHandle { place:1 }],&[3]),
+        block(2,vec![],&[3]),ret(3),
+    ]),"E_PROTOCOL_RETURN_JOIN");
+}
+#[test]
 fn old_lease_after_move_and_unreturned_owner_denied() {
     denied(program(false,vec![block(0,vec![
         init(),connect(1,10),Op::MoveLease { from:10,into:11 },
