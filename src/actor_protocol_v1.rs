@@ -112,6 +112,8 @@ struct Facts {
     owners: BTreeMap<PlaceId, Owner>,
     leases: BTreeMap<LeaseId, Lease>,
     loans: BTreeMap<LoanId, (PlaceId, LoanKind)>,
+    /// One returned affine capability per path in the bounded single-result ABI.
+    returned_handles: u8,
 }
 
 fn live<'a>(facts: &'a Facts, id: PlaceId, block: BlockId, i: usize) -> Result<&'a Owner, Diagnostic> {
@@ -138,6 +140,9 @@ fn loan_on(facts: &Facts, place: PlaceId) -> bool {
 fn join(mut left: Facts, right: &Facts, block: BlockId) -> Result<Facts, Diagnostic> {
     if left.leases != right.leases { return Err(err("E_PROTOCOL_LEASE_JOIN", block, 0)); }
     if left.loans != right.loans { return Err(err("E_PROTOCOL_LOAN_JOIN", block, 0)); }
+    if left.returned_handles != right.returned_handles {
+        return Err(err("E_PROTOCOL_RETURN_JOIN", block, 0));
+    }
     let ids: BTreeSet<_> = left.owners.keys().chain(right.owners.keys()).copied().collect();
     if ids.len() > MAX_HANDLES { return Err(err("E_PROTOCOL_HANDLE_BUDGET", block, 0)); }
     for id in ids {
@@ -353,7 +358,11 @@ pub fn verify(program: &Program) -> Result<Proof, Diagnostic> {
                 Op::ReturnHandle { place } => {
                     let owner = live(&f, *place, id, i)?.clone();
                     if loan_on(&f, *place) { return Err(err("E_PROTOCOL_LOAN_CONFLICT", id, i)); }
+                    if f.returned_handles != 0 {
+                        return Err(err("E_PROTOCOL_MULTIPLE_RETURN_HANDLES", id, i));
+                    }
                     f.owners.insert(*place, owner.moved());
+                    f.returned_handles += 1;
                 }
                 Op::DisposeTerminal { place } => {
                     let owner = live(&f, *place, id, i)?.clone();
