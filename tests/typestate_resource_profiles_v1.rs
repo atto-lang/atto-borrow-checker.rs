@@ -1,7 +1,7 @@
 use atto_borrow_checker::typestate_v1::*;
 
 fn verify_ops(protocol: Protocol, ops: Vec<Op>) -> Result<Proof, Diagnostic> {
-    verify(&Program {
+    verify(&Program { suspending: false,
         entry: 0,
         protocols: vec![protocol],
         blocks: vec![Block { id: 0, ops, successors: vec![] }],
@@ -29,9 +29,9 @@ fn socket() -> Protocol {
             State { id: 2, name: "Closed".into(), cleanup: Cleanup::Inert },
         ],
         methods: vec![
-            Method { name: "connect".into(), from: vec![0], to: Some(1), access: Access::Exclusive },
-            Method { name: "send".into(), from: vec![1], to: None, access: Access::Read },
-            Method { name: "close".into(), from: vec![0, 1], to: Some(2), access: Access::Exclusive },
+            Method { name: "connect".into(), from: vec![0], to: Some(1), access: Access::Exclusive , suspends: false },
+            Method { name: "send".into(), from: vec![1], to: None, access: Access::Read , suspends: false },
+            Method { name: "close".into(), from: vec![0, 1], to: Some(2), access: Access::Exclusive , suspends: false },
         ],
     }
 }
@@ -58,8 +58,8 @@ fn builder() -> Protocol {
             State { id: 1, name: "Consumed".into(), cleanup: Cleanup::Inert },
         ],
         methods: vec![
-            Method { name: "append".into(), from: vec![0], to: None, access: Access::Exclusive },
-            Method { name: "finish".into(), from: vec![0], to: Some(1), access: Access::Exclusive },
+            Method { name: "append".into(), from: vec![0], to: None, access: Access::Exclusive , suspends: false },
+            Method { name: "finish".into(), from: vec![0], to: Some(1), access: Access::Exclusive , suspends: false },
         ],
     }
 }
