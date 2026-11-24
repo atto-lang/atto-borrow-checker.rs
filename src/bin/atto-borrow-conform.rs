@@ -238,6 +238,9 @@ fn cmd_cross_check(path: &str, policy: CrossPolicy) -> Result<bool, String> {
             ]))
         );
     }
+    if records == 0 {
+        return Err(format!("{path}: report contains no function records"));
+    }
     println!(
         "{}",
         write_json(&obj(vec![(
