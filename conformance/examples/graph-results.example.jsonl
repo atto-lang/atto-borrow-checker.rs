@@ -1,0 +1,6 @@
+{"schema":"atto-borrow-graph-results-v1","backend":"llvm","case":"C01","verdict":"accept","code":null}
+{"schema":"atto-borrow-graph-results-v1","backend":"llvm","case":"C03","verdict":"reject","code":"E_USE_AFTER_MOVE_OR_DROP"}
+{"schema":"atto-borrow-graph-results-v1","backend":"llvm","case":"C06","verdict":"reject","code":"E_BORROW","note":"family spelling: WRONG_CODE at L1"}
+{"schema":"atto-borrow-graph-results-v1","backend":"llvm","case":"C22","verdict":"accept","code":null,"note":"leaked loan accepted: WRONG_VERDICT"}
+{"schema":"atto-borrow-graph-results-v1","backend":"llvm","case":"C99","verdict":"accept","code":null,"note":"not in corpus: UNKNOWN_CASE"}
+{"schema":"atto-borrow-graph-results-v1","backend":"llvm","case":"C30","verdict":"unsupported","code":null,"reason":"OwnershipCfg has no Freeze operation"}
