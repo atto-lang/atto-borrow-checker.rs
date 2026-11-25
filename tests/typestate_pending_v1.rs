@@ -7,41 +7,80 @@ fn file_protocol() -> Protocol {
         id: 9,
         name: "File".into(),
         states: vec![
-            State { id: 0, name: "Open".into(), cleanup: Cleanup::VerifiedDestructor },
-            State { id: 1, name: "Closed".into(), cleanup: Cleanup::Inert },
-            State { id: 2, name: "Indeterminate".into(), cleanup: Cleanup::ExplicitTransition },
+            State {
+                id: 0,
+                name: "Open".into(),
+                cleanup: Cleanup::VerifiedDestructor,
+            },
+            State {
+                id: 1,
+                name: "Closed".into(),
+                cleanup: Cleanup::Inert,
+            },
+            State {
+                id: 2,
+                name: "Indeterminate".into(),
+                cleanup: Cleanup::ExplicitTransition,
+            },
         ],
         methods: vec![
             Method {
-                name: "close".into(), from: vec![0], to: Some(1),
-                access: Access::Exclusive, suspends: true,
+                name: "close".into(),
+                from: vec![0],
+                to: Some(1),
+                access: Access::Exclusive,
+                suspends: true,
                 async_outcomes: Some(AsyncOutcomes {
-                    on_error: 0, on_timeout: 2, on_cancel: 2,
+                    on_error: 0,
+                    on_timeout: 2,
+                    on_cancel: 2,
                 }),
             },
             Method {
-                name: "read".into(), from: vec![0], to: None,
-                access: Access::Read, suspends: false, async_outcomes: None,
+                name: "read".into(),
+                from: vec![0],
+                to: None,
+                access: Access::Read,
+                suspends: false,
+                async_outcomes: None,
             },
             Method {
-                name: "is_closed".into(), from: vec![0, 1, 2], to: None,
-                access: Access::Read, suspends: false, async_outcomes: None,
+                name: "is_closed".into(),
+                from: vec![0, 1, 2],
+                to: None,
+                access: Access::Read,
+                suspends: false,
+                async_outcomes: None,
             },
         ],
     }
 }
 
 fn init(place: PlaceId) -> Op {
-    Op::Init { place, protocol: 9, state: 0 }
+    Op::Init {
+        place,
+        protocol: 9,
+        state: 0,
+    }
 }
 fn begin() -> Op {
-    Op::BeginAsync { from: 1, pending: 42, method: "close".into() }
+    Op::BeginAsync {
+        from: 1,
+        pending: 42,
+        method: "close".into(),
+    }
 }
 fn await_close() -> Op {
-    Op::AwaitPending { pending: 42, into: 2 }
+    Op::AwaitPending {
+        pending: 42,
+        into: 2,
+    }
 }
 fn read(place: PlaceId) -> Op {
-    Op::Call { place, method: "read".into() }
+    Op::Call {
+        place,
+        method: "read".into(),
+    }
 }
 fn branches() -> Program {
     Program {
@@ -49,11 +88,31 @@ fn branches() -> Program {
         suspending: true,
         protocols: vec![file_protocol()],
         blocks: vec![
-            Block { id: 0, ops: vec![init(1), begin(), await_close()], successors: vec![1, 2, 3, 4] },
-            Block { id: 1, ops: vec![Op::Return], successors: vec![] },
-            Block { id: 2, ops: vec![Op::Return], successors: vec![] },
-            Block { id: 3, ops: vec![Op::Return], successors: vec![] },
-            Block { id: 4, ops: vec![Op::Return], successors: vec![] },
+            Block {
+                id: 0,
+                ops: vec![init(1), begin(), await_close()],
+                successors: vec![1, 2, 3, 4],
+            },
+            Block {
+                id: 1,
+                ops: vec![Op::Return],
+                successors: vec![],
+            },
+            Block {
+                id: 2,
+                ops: vec![Op::Return],
+                successors: vec![],
+            },
+            Block {
+                id: 3,
+                ops: vec![Op::Return],
+                successors: vec![],
+            },
+            Block {
+                id: 4,
+                ops: vec![Op::Return],
+                successors: vec![],
+            },
         ],
     }
 }
@@ -112,7 +171,9 @@ fn outcome_settlement_never_resurrects_moved_original_place() {
 fn pending_operation_cannot_escape_without_any_settlement() {
     let mut p = rollback_contract(branches());
     p.blocks = vec![Block {
-        id: 0, ops: vec![init(1), begin(), Op::Return], successors: vec![],
+        id: 0,
+        ops: vec![init(1), begin(), Op::Return],
+        successors: vec![],
     }];
     error(p, "E_TYPESTATE_PENDING_ESCAPE");
 }
@@ -132,7 +193,10 @@ fn outcome_branching_requires_exactly_four_distinct_successors() {
 #[test]
 fn only_known_live_pending_id_can_await() {
     let mut p = rollback_contract(branches());
-    p.blocks[0].ops[2] = Op::AwaitPending { pending: 99, into: 2 };
+    p.blocks[0].ops[2] = Op::AwaitPending {
+        pending: 99,
+        into: 2,
+    };
     error(p, "E_TYPESTATE_UNKNOWN_PENDING");
 }
 
@@ -158,9 +222,14 @@ fn suspension_requires_a_suspending_caller_and_method() {
 #[test]
 fn held_loan_cannot_enter_async_escrow() {
     let mut p = rollback_contract(branches());
-    p.blocks[0].ops.insert(1, Op::Borrow {
-        place: 1, loan: 3, kind: BorrowKind::Shared,
-    });
+    p.blocks[0].ops.insert(
+        1,
+        Op::Borrow {
+            place: 1,
+            loan: 3,
+            kind: BorrowKind::Shared,
+        },
+    );
     error(p, "E_TYPESTATE_SUSPEND_LOAN");
 }
 
@@ -170,7 +239,11 @@ fn invalid_or_missing_outcome_contracts_are_rejected() {
     p.protocols[0].methods[0].async_outcomes = None;
     error(p, "E_TYPESTATE_INVALID_PROTOCOL");
     let mut p = rollback_contract(branches());
-    p.protocols[0].methods[0].async_outcomes.as_mut().unwrap().on_cancel = 200;
+    p.protocols[0].methods[0]
+        .async_outcomes
+        .as_mut()
+        .unwrap()
+        .on_cancel = 200;
     error(p, "E_TYPESTATE_INVALID_PROTOCOL");
 }
 
@@ -188,9 +261,16 @@ fn premature_drop_and_double_completion_cannot_consume_pending_escrow() {
     error(p, "E_TYPESTATE_NOT_LIVE");
 
     let mut p = rollback_contract(branches());
-    p.blocks[1].ops = vec![Op::AwaitPending { pending: 42, into: 3 }];
+    p.blocks[1].ops = vec![Op::AwaitPending {
+        pending: 42,
+        into: 3,
+    }];
     p.blocks[1].successors = vec![5, 6, 7, 8];
-    p.blocks.extend((5..=8).map(|id| Block { id, ops: vec![Op::Return], successors: vec![] }));
+    p.blocks.extend((5..=8).map(|id| Block {
+        id,
+        ops: vec![Op::Return],
+        successors: vec![],
+    }));
     error(p, "E_TYPESTATE_UNKNOWN_PENDING");
 }
 
@@ -201,9 +281,17 @@ fn joined_success_error_states_allow_common_inspection_not_open_only_read() {
     p.blocks[1].successors = vec![5];
     p.blocks[2].ops.clear();
     p.blocks[2].successors = vec![5];
-    p.blocks.push(Block { id: 5, ops: vec![Op::Call {
-        place: 2, method: "is_closed".into(),
-    }, Op::Return], successors: vec![] });
+    p.blocks.push(Block {
+        id: 5,
+        ops: vec![
+            Op::Call {
+                place: 2,
+                method: "is_closed".into(),
+            },
+            Op::Return,
+        ],
+        successors: vec![],
+    });
     assert!(verify(&p).is_ok());
     p.blocks.last_mut().unwrap().ops[0] = read(2);
     error(p, "E_TYPESTATE_ILLEGAL_OPERATION");
@@ -212,20 +300,33 @@ fn joined_success_error_states_allow_common_inspection_not_open_only_read() {
 #[test]
 fn unrelated_second_begin_is_denied_while_escrow_is_pending() {
     let mut p = rollback_contract(branches());
-    p.blocks[0].ops.insert(2, Op::BeginAsync {
-        from: 3, pending: 43, method: "close".into(),
-    });
+    p.blocks[0].ops.insert(
+        2,
+        Op::BeginAsync {
+            from: 3,
+            pending: 43,
+            method: "close".into(),
+        },
+    );
     error(p, "E_TYPESTATE_PENDING_CONFLICT");
 }
 
 #[test]
 fn cancellation_state_must_be_safe_independently_of_timeout_state() {
     let mut p = rollback_contract(branches());
-    p.protocols[0].methods[0].async_outcomes.as_mut().unwrap().on_cancel = 2;
+    p.protocols[0].methods[0]
+        .async_outcomes
+        .as_mut()
+        .unwrap()
+        .on_cancel = 2;
     error(p, "E_TYPESTATE_INCOMPLETE");
 
     let mut p = rollback_contract(branches());
-    p.protocols[0].methods[0].async_outcomes.as_mut().unwrap().on_timeout = 2;
+    p.protocols[0].methods[0]
+        .async_outcomes
+        .as_mut()
+        .unwrap()
+        .on_timeout = 2;
     error(p, "E_TYPESTATE_INCOMPLETE");
 }
 
@@ -237,7 +338,9 @@ fn async_begin_rejects_uninitialized_source_and_non_transition_method() {
 
     let mut p = rollback_contract(branches());
     p.blocks[0].ops[1] = Op::BeginAsync {
-        from: 1, pending: 42, method: "read".into(),
+        from: 1,
+        pending: 42,
+        method: "read".into(),
     };
     error(p, "E_TYPESTATE_NOT_SUSPENDING");
 }
@@ -245,8 +348,13 @@ fn async_begin_rejects_uninitialized_source_and_non_transition_method() {
 #[test]
 fn live_mutable_loan_is_not_a_cancellation_safe_async_authority() {
     let mut p = rollback_contract(branches());
-    p.blocks[0].ops.insert(1, Op::Borrow {
-        place: 1, loan: 7, kind: BorrowKind::Mutable,
-    });
+    p.blocks[0].ops.insert(
+        1,
+        Op::Borrow {
+            place: 1,
+            loan: 7,
+            kind: BorrowKind::Mutable,
+        },
+    );
     error(p, "E_TYPESTATE_SUSPEND_LOAN");
 }

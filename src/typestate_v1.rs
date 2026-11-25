@@ -89,31 +89,68 @@ pub enum BorrowKind {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Op {
     /// A typed constructor/reinitialization, never a dynamic unchecked cast.
-    Init { place: PlaceId, protocol: ProtocolId, state: StateId },
+    Init {
+        place: PlaceId,
+        protocol: ProtocolId,
+        state: StateId,
+    },
     /// An operation on the owner itself (the adapter must prove receiver rights).
     /// Read-only receiver access; cannot execute state-changing methods.
-    Call { place: PlaceId, method: String },
+    Call {
+        place: PlaceId,
+        method: String,
+    },
     /// A separately typechecked exclusive `mut` owning receiver.
-    CallMut { place: PlaceId, method: String },
+    CallMut {
+        place: PlaceId,
+        method: String,
+    },
     /// An operation through the exact checked loan.
-    CallThrough { loan: LoanId, method: String },
+    CallThrough {
+        loan: LoanId,
+        method: String,
+    },
     /// Awaited, state-preserving read from a suspension-marked method.
-    AwaitCall { place: PlaceId, method: String },
+    AwaitCall {
+        place: PlaceId,
+        method: String,
+    },
     /// Awaited, state-preserving exclusive operation; no in-flight state changes.
-    AwaitCallMut { place: PlaceId, method: String },
+    AwaitCallMut {
+        place: PlaceId,
+        method: String,
+    },
     /// Begins an exclusive async operation and consumes its source owner.
-    BeginAsync { from: PlaceId, pending: PendingId, method: String },
+    BeginAsync {
+        from: PlaceId,
+        pending: PendingId,
+        method: String,
+    },
     /// Last operation of a 4-way branch with ordered successors:
     /// [success, error, timeout, cancellation]. Exactly one outcome settles.
-    AwaitPending { pending: PendingId, into: PlaceId },
+    AwaitPending {
+        pending: PendingId,
+        into: PlaceId,
+    },
     /// Suspension unrelated to a resource operation; resource owner stays live.
     Suspend,
-    Borrow { place: PlaceId, loan: LoanId, kind: BorrowKind },
-    EndBorrow { loan: LoanId },
+    Borrow {
+        place: PlaceId,
+        loan: LoanId,
+        kind: BorrowKind,
+    },
+    EndBorrow {
+        loan: LoanId,
+    },
     /// Consuming `take!` transfers typestate to a *distinct* place.
-    Take { from: PlaceId, into: PlaceId },
+    Take {
+        from: PlaceId,
+        into: PlaceId,
+    },
     /// `drop!` / explicit cleanup. Cannot discard required-transition states.
-    Drop { place: PlaceId },
+    Drop {
+        place: PlaceId,
+    },
     /// All scope/exception/cancellation exits must be represented independently.
     Return,
 }
@@ -142,7 +179,11 @@ pub struct Diagnostic {
 }
 
 fn err(code: &'static str, block: BlockId, operation: usize) -> Diagnostic {
-    Diagnostic { code, block, operation }
+    Diagnostic {
+        code,
+        block,
+        operation,
+    }
 }
 
 /// None in a state set means the place might be uninitialized, moved or dropped.
@@ -194,14 +235,18 @@ pub struct Proof {
     pub verified_operations: usize,
 }
 
-fn checked_protocols(protocols: &[Protocol]) -> Result<BTreeMap<ProtocolId, &Protocol>, Diagnostic> {
+fn checked_protocols(
+    protocols: &[Protocol],
+) -> Result<BTreeMap<ProtocolId, &Protocol>, Diagnostic> {
     if protocols.is_empty() || protocols.len() > MAX_PROTOCOLS {
         return Err(err("E_TYPESTATE_PROTOCOL_BUDGET", 0, 0));
     }
     let mut by_id = BTreeMap::new();
     for protocol in protocols {
-        if protocol.name.is_empty() || by_id.insert(protocol.id, protocol).is_some()
-            || protocol.states.is_empty() || protocol.states.len() > MAX_STATES
+        if protocol.name.is_empty()
+            || by_id.insert(protocol.id, protocol).is_some()
+            || protocol.states.is_empty()
+            || protocol.states.len() > MAX_STATES
             || protocol.methods.len() > MAX_METHODS
         {
             return Err(err("E_TYPESTATE_INVALID_PROTOCOL", 0, 0));
@@ -215,15 +260,19 @@ fn checked_protocols(protocols: &[Protocol]) -> Result<BTreeMap<ProtocolId, &Pro
         }
         let mut methods = BTreeSet::new();
         for method in &protocol.methods {
-            if method.name.is_empty() || !methods.insert(&method.name) || method.from.is_empty()
-                || method.from.len() > MAX_STATES || method.from.iter().any(|s| !states.contains(s))
+            if method.name.is_empty()
+                || !methods.insert(&method.name)
+                || method.from.is_empty()
+                || method.from.len() > MAX_STATES
+                || method.from.iter().any(|s| !states.contains(s))
                 || method.to.is_some_and(|s| !states.contains(&s))
                 || (method.to.is_some() && method.access != Access::Exclusive)
                 || (method.async_outcomes.is_some() != (method.suspends && method.to.is_some()))
-                || method.async_outcomes.as_ref().is_some_and(|outcomes|
+                || method.async_outcomes.as_ref().is_some_and(|outcomes| {
                     !states.contains(&outcomes.on_error)
-                    || !states.contains(&outcomes.on_timeout)
-                    || !states.contains(&outcomes.on_cancel))
+                        || !states.contains(&outcomes.on_timeout)
+                        || !states.contains(&outcomes.on_cancel)
+                })
             {
                 return Err(err("E_TYPESTATE_INVALID_PROTOCOL", 0, 0));
             }
@@ -235,7 +284,9 @@ fn checked_protocols(protocols: &[Protocol]) -> Result<BTreeMap<ProtocolId, &Pro
     Ok(by_id)
 }
 
-fn graph(program: &Program) -> Result<(BTreeMap<BlockId, &Block>, Vec<BlockId>, usize), Diagnostic> {
+fn graph(
+    program: &Program,
+) -> Result<(BTreeMap<BlockId, &Block>, Vec<BlockId>, usize), Diagnostic> {
     if program.blocks.is_empty() || program.blocks.len() > MAX_BLOCKS {
         return Err(err("E_TYPESTATE_CFG_BUDGET", 0, 0));
     }
@@ -306,14 +357,20 @@ fn graph(program: &Program) -> Result<(BTreeMap<BlockId, &Block>, Vec<BlockId>, 
     if reachable.len() != blocks.len() {
         return Err(err("E_TYPESTATE_UNREACHABLE_BLOCK", program.entry, 0));
     }
-    let mut ready: VecDeque<_> = degree.iter().filter(|(_, n)| **n == 0).map(|(id, _)| *id).collect();
+    let mut ready: VecDeque<_> = degree
+        .iter()
+        .filter(|(_, n)| **n == 0)
+        .map(|(id, _)| *id)
+        .collect();
     let mut order = Vec::with_capacity(blocks.len());
     while let Some(id) = ready.pop_front() {
         order.push(id);
         for target in &blocks[&id].successors {
             let n = degree.get_mut(target).expect("checked edge");
             *n -= 1;
-            if *n == 0 { ready.push_back(*target); }
+            if *n == 0 {
+                ready.push_back(*target);
+            }
         }
     }
     if order.len() != blocks.len() {
@@ -330,7 +387,12 @@ fn join(into: &mut Facts, rhs: &Facts, block: BlockId) -> Result<(), Diagnostic>
     if into.pending != rhs.pending {
         return Err(err("E_TYPESTATE_PENDING_JOIN", block, 0));
     }
-    let ids: BTreeSet<_> = into.places.keys().chain(rhs.places.keys()).copied().collect();
+    let ids: BTreeSet<_> = into
+        .places
+        .keys()
+        .chain(rhs.places.keys())
+        .copied()
+        .collect();
     for id in ids {
         match (into.places.get_mut(&id), rhs.places.get(&id)) {
             (Some(lhs), Some(rhs)) => {
@@ -339,7 +401,9 @@ fn join(into: &mut Facts, rhs: &Facts, block: BlockId) -> Result<(), Diagnostic>
                 }
                 lhs.states.extend(rhs.states.iter().copied());
             }
-            (Some(lhs), None) => { lhs.states.insert(None); }
+            (Some(lhs), None) => {
+                lhs.states.insert(None);
+            }
             (None, Some(rhs)) => {
                 let mut fact = rhs.clone();
                 fact.states.insert(None);
@@ -351,8 +415,16 @@ fn join(into: &mut Facts, rhs: &Facts, block: BlockId) -> Result<(), Diagnostic>
     Ok(())
 }
 
-fn live<'a>(facts: &'a Facts, place: PlaceId, block: BlockId, i: usize) -> Result<&'a Fact, Diagnostic> {
-    let fact = facts.places.get(&place).ok_or_else(|| err("E_TYPESTATE_NOT_LIVE", block, i))?;
+fn live<'a>(
+    facts: &'a Facts,
+    place: PlaceId,
+    block: BlockId,
+    i: usize,
+) -> Result<&'a Fact, Diagnostic> {
+    let fact = facts
+        .places
+        .get(&place)
+        .ok_or_else(|| err("E_TYPESTATE_NOT_LIVE", block, i))?;
     if fact.states.contains(&None) || fact.states.is_empty() {
         return Err(err("E_TYPESTATE_NOT_LIVE", block, i));
     }
@@ -361,17 +433,31 @@ fn live<'a>(facts: &'a Facts, place: PlaceId, block: BlockId, i: usize) -> Resul
 
 fn can_release(fact: &Fact, protocol: &Protocol) -> bool {
     fact.states.iter().flatten().all(|id| {
-        protocol.states.iter().find(|s| s.id == *id)
+        protocol
+            .states
+            .iter()
+            .find(|s| s.id == *id)
             .is_some_and(|s| s.cleanup != Cleanup::ExplicitTransition)
     })
 }
 
-fn apply_method(facts: &mut Facts, protocols: &BTreeMap<ProtocolId, &Protocol>,
-    place: PlaceId, method_name: &str, through: Option<BorrowKind>,
-    receiver: Access, awaited: bool, block: BlockId, i: usize) -> Result<(), Diagnostic> {
+fn apply_method(
+    facts: &mut Facts,
+    protocols: &BTreeMap<ProtocolId, &Protocol>,
+    place: PlaceId,
+    method_name: &str,
+    through: Option<BorrowKind>,
+    receiver: Access,
+    awaited: bool,
+    block: BlockId,
+    i: usize,
+) -> Result<(), Diagnostic> {
     let fact = live(facts, place, block, i)?;
     let protocol = protocols[&fact.protocol];
-    let method = protocol.methods.iter().find(|m| m.name == method_name)
+    let method = protocol
+        .methods
+        .iter()
+        .find(|m| m.name == method_name)
         .ok_or_else(|| err("E_TYPESTATE_UNKNOWN_METHOD", block, i))?;
     if method.suspends && !awaited {
         return Err(err("E_TYPESTATE_AWAIT_REQUIRED", block, i));
@@ -387,15 +473,27 @@ fn apply_method(facts: &mut Facts, protocols: &BTreeMap<ProtocolId, &Protocol>,
     if awaited && !facts.loans.is_empty() {
         return Err(err("E_TYPESTATE_SUSPEND_LOAN", block, i));
     }
-    if fact.states.iter().flatten().any(|s| !method.from.contains(s)) {
+    if fact
+        .states
+        .iter()
+        .flatten()
+        .any(|s| !method.from.contains(s))
+    {
         return Err(err("E_TYPESTATE_ILLEGAL_OPERATION", block, i));
     }
     if method.access == Access::Exclusive && receiver != Access::Exclusive {
         return Err(err("E_TYPESTATE_MUT_BORROW_REQUIRED", block, i));
     }
-    let loans: Vec<_> = facts.loans.values().filter(|loan| loan.place == place).collect();
-    if through.is_none() && (receiver == Access::Exclusive && !loans.is_empty()
-        || receiver == Access::Read && loans.iter().any(|loan| loan.kind == BorrowKind::Mutable)) {
+    let loans: Vec<_> = facts
+        .loans
+        .values()
+        .filter(|loan| loan.place == place)
+        .collect();
+    if through.is_none()
+        && (receiver == Access::Exclusive && !loans.is_empty()
+            || receiver == Access::Read
+                && loans.iter().any(|loan| loan.kind == BorrowKind::Mutable))
+    {
         return Err(err("E_TYPESTATE_LOAN_CONFLICT", block, i));
     }
     if let Some(to) = method.to {
@@ -415,12 +513,20 @@ pub fn verify(program: &Program) -> Result<Proof, Diagnostic> {
     incoming.insert(program.entry, Facts::default());
     for id in order {
         let block = blocks[&id];
-        let mut facts = incoming.remove(&id).ok_or_else(|| err("E_TYPESTATE_INVALID_CFG", id, 0))?;
+        let mut facts = incoming
+            .remove(&id)
+            .ok_or_else(|| err("E_TYPESTATE_INVALID_CFG", id, 0))?;
         let mut split: Option<(PendingId, PlaceId)> = None;
         for (i, op) in block.ops.iter().enumerate() {
             match op {
-                Op::Init { place, protocol, state } => {
-                    let proto = protocols.get(protocol).ok_or_else(|| err("E_TYPESTATE_UNKNOWN_PROTOCOL", id, i))?;
+                Op::Init {
+                    place,
+                    protocol,
+                    state,
+                } => {
+                    let proto = protocols
+                        .get(protocol)
+                        .ok_or_else(|| err("E_TYPESTATE_UNKNOWN_PROTOCOL", id, i))?;
                     if !proto.states.iter().any(|s| s.id == *state) {
                         return Err(err("E_TYPESTATE_UNKNOWN_STATE", id, i));
                     }
@@ -429,21 +535,64 @@ pub fn verify(program: &Program) -> Result<Proof, Diagnostic> {
                             return Err(err("E_TYPESTATE_DOUBLE_INIT", id, i));
                         }
                     }
-                    facts.places.insert(*place, Fact { protocol: *protocol, states: BTreeSet::from([Some(*state)]) });
+                    facts.places.insert(
+                        *place,
+                        Fact {
+                            protocol: *protocol,
+                            states: BTreeSet::from([Some(*state)]),
+                        },
+                    );
                     if facts.places.len() > MAX_PLACES {
                         return Err(err("E_TYPESTATE_PLACE_BUDGET", id, i));
                     }
                 }
                 Op::Call { place, method } => {
-                    apply_method(&mut facts, &protocols, *place, method, None, Access::Read, false, id, i)?;
+                    apply_method(
+                        &mut facts,
+                        &protocols,
+                        *place,
+                        method,
+                        None,
+                        Access::Read,
+                        false,
+                        id,
+                        i,
+                    )?;
                 }
                 Op::CallMut { place, method } => {
-                    apply_method(&mut facts, &protocols, *place, method, None, Access::Exclusive, false, id, i)?;
+                    apply_method(
+                        &mut facts,
+                        &protocols,
+                        *place,
+                        method,
+                        None,
+                        Access::Exclusive,
+                        false,
+                        id,
+                        i,
+                    )?;
                 }
                 Op::CallThrough { loan, method } => {
-                    let source = *facts.loans.get(loan).ok_or_else(|| err("E_TYPESTATE_UNKNOWN_LOAN", id, i))?;
-                    let mode = if source.kind == BorrowKind::Mutable { Access::Exclusive } else { Access::Read };
-                    apply_method(&mut facts, &protocols, source.place, method, Some(source.kind), mode, false, id, i)?;
+                    let source = *facts
+                        .loans
+                        .get(loan)
+                        .ok_or_else(|| err("E_TYPESTATE_UNKNOWN_LOAN", id, i))?;
+                    let mode = if source.kind == BorrowKind::Mutable {
+                        Access::Exclusive
+                    } else {
+                        Access::Read
+                    };
+                    apply_method(
+                        &mut facts,
+                        &protocols,
+                        source.place,
+                        method,
+                        Some(source.kind),
+                        mode,
+                        false,
+                        id,
+                        i,
+                    )?;
                 }
                 Op::AwaitCall { place, method } | Op::AwaitCallMut { place, method } => {
                     if !program.suspending {
@@ -458,9 +607,15 @@ pub fn verify(program: &Program) -> Result<Proof, Diagnostic> {
                     } else {
                         Access::Read
                     };
-                    apply_method(&mut facts, &protocols, *place, method, None, mode, true, id, i)?;
+                    apply_method(
+                        &mut facts, &protocols, *place, method, None, mode, true, id, i,
+                    )?;
                 }
-                Op::BeginAsync { from, pending, method } => {
+                Op::BeginAsync {
+                    from,
+                    pending,
+                    method,
+                } => {
                     if !program.suspending {
                         return Err(err("E_TYPESTATE_AWAIT_CONTEXT", id, i));
                     }
@@ -472,7 +627,10 @@ pub fn verify(program: &Program) -> Result<Proof, Diagnostic> {
                         return Err(err("E_TYPESTATE_SUSPEND_LOAN", id, i));
                     }
                     let protocol = protocols[&source.protocol];
-                    let signature = protocol.methods.iter().find(|m| m.name == *method)
+                    let signature = protocol
+                        .methods
+                        .iter()
+                        .find(|m| m.name == *method)
                         .ok_or_else(|| err("E_TYPESTATE_UNKNOWN_METHOD", id, i))?;
                     if !signature.suspends {
                         return Err(err("E_TYPESTATE_NOT_SUSPENDING", id, i));
@@ -480,33 +638,50 @@ pub fn verify(program: &Program) -> Result<Proof, Diagnostic> {
                     if signature.access != Access::Exclusive || signature.to.is_none() {
                         return Err(err("E_TYPESTATE_ASYNC_CONTRACT", id, i));
                     }
-                    if source.states.iter().flatten().any(|state| !signature.from.contains(state)) {
+                    if source
+                        .states
+                        .iter()
+                        .flatten()
+                        .any(|state| !signature.from.contains(state))
+                    {
                         return Err(err("E_TYPESTATE_ILLEGAL_OPERATION", id, i));
                     }
-                    let outcomes = signature.async_outcomes.as_ref()
+                    let outcomes = signature
+                        .async_outcomes
+                        .as_ref()
                         .ok_or_else(|| err("E_TYPESTATE_ASYNC_CONTRACT", id, i))?;
-                    facts.pending.insert(*pending, Pending {
-                        protocol: source.protocol,
-                        success: signature.to.expect("validated transition"),
-                        error: outcomes.on_error,
-                        timeout: outcomes.on_timeout,
-                        cancel: outcomes.on_cancel,
-                    });
+                    facts.pending.insert(
+                        *pending,
+                        Pending {
+                            protocol: source.protocol,
+                            success: signature.to.expect("validated transition"),
+                            error: outcomes.on_error,
+                            timeout: outcomes.on_timeout,
+                            cancel: outcomes.on_cancel,
+                        },
+                    );
                     // take! consumes old owner *before* suspension.
-                    facts.places.get_mut(from).expect("checked live owner").states = BTreeSet::from([None]);
+                    facts
+                        .places
+                        .get_mut(from)
+                        .expect("checked live owner")
+                        .states = BTreeSet::from([None]);
                 }
                 Op::AwaitPending { pending, into } => {
                     if !program.suspending {
                         return Err(err("E_TYPESTATE_AWAIT_CONTEXT", id, i));
                     }
-                    let escrow = facts.pending.get(pending)
+                    let escrow = facts
+                        .pending
+                        .get(pending)
                         .ok_or_else(|| err("E_TYPESTATE_UNKNOWN_PENDING", id, i))?;
                     if !facts.loans.is_empty() {
                         return Err(err("E_TYPESTATE_SUSPEND_LOAN", id, i));
                     }
                     if let Some(target) = facts.places.get(into) {
                         if target.protocol != escrow.protocol
-                            || target.states != BTreeSet::from([None]) {
+                            || target.states != BTreeSet::from([None])
+                        {
                             return Err(err("E_TYPESTATE_TARGET_LIVE", id, i));
                         }
                     }
@@ -525,11 +700,19 @@ pub fn verify(program: &Program) -> Result<Proof, Diagnostic> {
                 }
                 Op::Borrow { place, loan, kind } => {
                     live(&facts, *place, id, i)?;
-                    if facts.loans.values().any(|l| l.place == *place &&
-                        (*kind == BorrowKind::Mutable || l.kind == BorrowKind::Mutable)) {
+                    if facts.loans.values().any(|l| {
+                        l.place == *place
+                            && (*kind == BorrowKind::Mutable || l.kind == BorrowKind::Mutable)
+                    }) {
                         return Err(err("E_TYPESTATE_LOAN_CONFLICT", id, i));
                     }
-                    facts.loans.insert(*loan, Loan { place: *place, kind: *kind });
+                    facts.loans.insert(
+                        *loan,
+                        Loan {
+                            place: *place,
+                            kind: *kind,
+                        },
+                    );
                 }
                 Op::EndBorrow { loan } => {
                     if facts.loans.remove(loan).is_none() {
@@ -537,18 +720,23 @@ pub fn verify(program: &Program) -> Result<Proof, Diagnostic> {
                     }
                 }
                 Op::Take { from, into } => {
-                    if from == into { return Err(err("E_TYPESTATE_ALIAS_TRANSFER", id, i)); }
+                    if from == into {
+                        return Err(err("E_TYPESTATE_ALIAS_TRANSFER", id, i));
+                    }
                     let source = live(&facts, *from, id, i)?.clone();
                     if facts.loans.values().any(|l| l.place == *from) {
                         return Err(err("E_TYPESTATE_LOAN_CONFLICT", id, i));
                     }
                     if let Some(target) = facts.places.get(into) {
-                        if target.protocol != source.protocol || target.states != BTreeSet::from([None]) {
+                        if target.protocol != source.protocol
+                            || target.states != BTreeSet::from([None])
+                        {
                             return Err(err("E_TYPESTATE_TARGET_LIVE", id, i));
                         }
                     }
                     facts.places.insert(*into, source);
-                    facts.places.get_mut(from).expect("checked source").states = BTreeSet::from([None]);
+                    facts.places.get_mut(from).expect("checked source").states =
+                        BTreeSet::from([None]);
                     if facts.places.len() > MAX_PLACES {
                         return Err(err("E_TYPESTATE_PLACE_BUDGET", id, i));
                     }
@@ -561,12 +749,21 @@ pub fn verify(program: &Program) -> Result<Proof, Diagnostic> {
                     if !can_release(fact, protocols[&fact.protocol]) {
                         return Err(err("E_TYPESTATE_INCOMPLETE", id, i));
                     }
-                    facts.places.get_mut(place).expect("checked drop").states = BTreeSet::from([None]);
+                    facts.places.get_mut(place).expect("checked drop").states =
+                        BTreeSet::from([None]);
                 }
                 Op::Return => {
-                    if !facts.loans.is_empty() { return Err(err("E_TYPESTATE_LOAN_ESCAPE", id, i)); }
-                    if !facts.pending.is_empty() { return Err(err("E_TYPESTATE_PENDING_ESCAPE", id, i)); }
-                    if facts.places.values().any(|f| !can_release(f, protocols[&f.protocol])) {
+                    if !facts.loans.is_empty() {
+                        return Err(err("E_TYPESTATE_LOAN_ESCAPE", id, i));
+                    }
+                    if !facts.pending.is_empty() {
+                        return Err(err("E_TYPESTATE_PENDING_ESCAPE", id, i));
+                    }
+                    if facts
+                        .places
+                        .values()
+                        .any(|f| !can_release(f, protocols[&f.protocol]))
+                    {
                         return Err(err("E_TYPESTATE_INCOMPLETE", id, i));
                     }
                 }
@@ -578,12 +775,17 @@ pub fn verify(program: &Program) -> Result<Proof, Diagnostic> {
         for (edge_index, target) in block.successors.iter().enumerate() {
             let mut outgoing = facts.clone();
             if let Some((pending_id, into)) = split {
-                let escrow = outgoing.pending.remove(&pending_id)
+                let escrow = outgoing
+                    .pending
+                    .remove(&pending_id)
                     .ok_or_else(|| err("E_TYPESTATE_UNKNOWN_PENDING", id, block.ops.len()))?;
-                outgoing.places.insert(into, Fact {
-                    protocol: escrow.protocol,
-                    states: BTreeSet::from([Some(escrow.state_for_edge(edge_index))]),
-                });
+                outgoing.places.insert(
+                    into,
+                    Fact {
+                        protocol: escrow.protocol,
+                        states: BTreeSet::from([Some(escrow.state_for_edge(edge_index))]),
+                    },
+                );
             }
             if let Some(existing) = incoming.get_mut(target) {
                 join(existing, &outgoing, *target)?;
@@ -592,5 +794,8 @@ pub fn verify(program: &Program) -> Result<Proof, Diagnostic> {
             }
         }
     }
-    Ok(Proof { verified_blocks: blocks.len(), verified_operations: total })
+    Ok(Proof {
+        verified_blocks: blocks.len(),
+        verified_operations: total,
+    })
 }
