@@ -109,13 +109,13 @@ fn suspended_loans_and_mutating_borrowed_owners_are_rejected() {
 fn state_union_and_optional_owner_joins_are_rejected() {
     denied(program(false,vec![
         block(0,vec![init()],&[1,2]),
-        block(1,vec![Op::Take { from:1,into:2 },Op::ReturnHandle { place:2 }],&[3]),
+        block(1,vec![Op::Take { from:1,into:2 }],&[3]),
         block(2,vec![],&[3]),
         ret(3),
     ]),"E_PROTOCOL_HANDLE_ESCAPE");
     denied(program(false,vec![
         block(0,vec![init()],&[1,2]),
-        block(1,vec![Op::Take { from:1,into:2 },Op::ReturnHandle { place:2 }],&[3]),
+        block(1,vec![Op::Take { from:1,into:2 }],&[3]),
         block(2,vec![],&[3]),
         block(3,vec![connect(1,10),Op::CancelLease { lease:10 },Op::Return],&[]),
     ]),"E_PROTOCOL_HANDLE_NOT_LIVE");
