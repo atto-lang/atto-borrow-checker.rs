@@ -17,6 +17,9 @@ pub mod lifetime_v1;
 /// Real host-side Arc/Weak, immutable graph, and Pin<Box<T>> safety model.
 /// Native guest admission still requires independently verified compiler IR.
 pub mod runtime_capabilities_v1;
+/// Source-only path verifier for checked cancellation/lease cleanup and
+/// physical descendant retirement; not a guest scheduler/runtime proof.
+pub mod task_cancel_unwind_v1;
 
 pub type OwnerId = u32;
 pub type LoanId = u32;
