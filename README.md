@@ -1,16 +1,18 @@
+> **AI agent instructions (organization-wide):** Before working on code, issues, or pull requests, read and follow the [organization `AGENTS.md`](https://github.com/atto-lang/.github/blob/main/AGENTS.md), including its **merge-first stealth-development policy**. Honor any repository-local `AGENTS.md`, explicit holds, and GitHub-enforced rules.
+
 # AttoLang canonical borrow checker (Rust)
 
-This repository hosts the **shared ownership verification core** for AttoLang. The language contract is canonical, but the fast compiler implementation remains local to each backend: Java/GraalVM, .NET/C#, LLVM/C++, Wasm, and Cranelift/Rust. Forge and the remaining oreslang-source.* compilers are additional conformance targets.
+This repository hosts the **shared ownership verification core** for AttoLang. The language contract is canonical, but the fast compiler implementation remains local to each backend: Java/GraalVM, .NET/C#, LLVM/C++, Wasm, and Cranelift/Rust. Forge and other `atto-source.*` backends are additional conformance targets.
+
+## Canonical naming and specification
+
+[atto-borrow-checker.rs](https://github.com/atto-lang/atto-borrow-checker.rs) is the maintained AttoLang repository. Use `.atto` source, `atto-*` repository names, and [atto-spec](https://github.com/atto-lang/atto-spec) for current language rules (ownership, borrowing, effects, actors, and syntax). Distinguish proposed and parser-only features from independently executed compiler support in [atto-platform-conformance](https://github.com/atto-lang/atto-platform-conformance). Naming migration does not by itself rename implementation artifacts, guarantee backend compatibility or certify guest execution.
 
 ## Hybrid compiler architecture
 
 Compiler-local type inference, ownership state changes and CFG construction can happen **in the same pass**. Repeated serialization, re-parsing and an external Rust process per function are not required. The shared Rust checker is used for independent proof, complex or unknown flows, and differential conformance; only equivalence-proven local fast paths may bypass its per-function invocation. When a local and canonical result disagree, fail closed.
 
 See [hybrid integration design](docs/HYBRID_COMPILER_INTEGRATION.md).
-
-## Experimental Polonius-inspired oracle
-
-The standalone `polonius_facts_v1` module adds bounded, point-sensitive loan fact propagation and branch-local liveness, inspired by Rust's Polonius Alpha. Its experimental `analyze_with_inferred_liveness` API derives branch-local lifetime facts backwards from typed-MIR use records, including a positive `Some(return)` / `None(insert, retry)` regression; it still cannot authenticate those source facts. The optional `mir_lifetime_census_v1` bridge compares independent expected/observed typed-MIR event manifests, reconstructs CFG/loan facts, and restricts SSA phi transfers to edge-split points. This checks submitted inventories only; it is **not** source or emitted-code authentication, complete SSA definition checking, or production codegen authority. It does **not** implement full Polonius Alpha, authenticate typed-MIR facts, or permit production V0/cyclic validation to be skipped. See [design and safety limits](docs/POLONIUS_LOAN_FACTS_V1.md).
 
 ## Current implementation
 
@@ -49,4 +51,26 @@ V0 now also distinguishes actor-owned mailbox moves and Copy+Send snapshots from
 
 `mir_v1::verify_mir_with_shadow_v0` validates the full operation inventory and input budgets before canonical verification, and publishes observations only after the entire CFG succeeds. Native compiler adapters remain responsible for independently deriving the complete typed inventory.
 
-Related work: [AttoLang shared conformance](https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/pull/646) and [broader Rust static analysis](https://github.com/ores-truffle-oreslang/oreslang-static-analysis.rs).
+## Backend conformance
+
+Each `atto-source.*` compiler keeps its own in-pass borrow checker; this crate is the master oracle that cross-verifies them. [`docs/CONFORMANCE_PLAN.md`](docs/CONFORMANCE_PLAN.md) defines three levels: L1 graph corpus with exact codes, L2 `.atto` source fixtures with family codes, and L3 re-verification of each backend's exported MIR. The `atto-borrow-conform` binary runs L1 and L3 over the formats in [`docs/WIRE_FORMAT_V1.md`](docs/WIRE_FORMAT_V1.md). The library still has no external dependencies.
+
+Related work: [AttoLang platform conformance](https://github.com/atto-lang/atto-platform-conformance) and [Rust static analysis](https://github.com/atto-lang/atto-static-analysis.rs).
+
+## Checked-handle syntax/oracle candidate (draft)
+
+`checked_handle_v1` adds an **independent Rust state-machine model**, not a compiler parser or runtime heap. It classifies the syntax pairs `ref!` / `rt ref`, `deref!` / `rt deref`, and `unref!` / `rt unref` as identical operations. The model mints opaque owner/handle/view tokens with actor, model, allocation and generation provenance; unique ownership is consumed by `ref_owned`, multiple immutable views block `unref`, and `unref` consumes the handle and returns the owner. Stale generations, double consumption/release, foreign models and unauthorized identity fail closed. The model now caps outstanding allocations at 4,096 and simultaneous read-view leases at 16,384, with quota failures checked before modifying model state. Five additional tests cover multiple views exiting a lexical Atto `block`, atomic allocation-budget denial, atomic view-budget denial, readonly argument validation without ownership transfer, and rejection of stale/foreign views; the module has eight unit tests total.
+
+**Limitations:** no `.atto` parser, no compiler-MIR operation integration, no physical guest memory, runtime FFI, shared mutable actor transport, pinning or quiescence. This standalone model must not be used to assert backend safety or five-backend parity. The intended compiler-backed first slice is [atto-source.rs PR #264](https://github.com/atto-lang/atto-source.rs/pull/264); broader conformance is tracked by [atto-platform-conformance issue #63](https://github.com/atto-lang/atto-platform-conformance/issues/63). These tests are host-model regressions; compiler and runtime evidence remains separate.
+
+## Path-sensitive checked-handle CFG proof candidate (draft)
+
+The new `checked_handle_cfg` module provides a **separate, bounded all-path lifetime oracle**. Its nodes are explicit `Ref`, `Deref`, `EndView`, `Unref`, `Exit`, `Nop`, `CallUnknown` and `Suspend` operations, connected by CFG successors. Unlike a simple lexical scan, it retains distinct facts at branch joins: an `unref!` in one arm cannot hide a missing `unref!` in the other. It rejects use-after-release, unref with live views, unreleased handles at normal/exceptional exits, unknown call effects, suspension with live handles, and cycles that retain checked handles without a separate progress/cancellation proof.
+
+This is a conservative **Polonius-inspired foundation**, not Polonius itself: no production typed-MIR emitter or source-to-CFG attribution is connected, no field-sensitive projection or NLL region solver is implemented, and no relaxation of the frontend's safe straight-line restriction is justified yet. The oracle limits input to **4,096 CFG nodes and 16,384 distinct states**. Its 8 new Rust unit tests are authored but not yet executed. Callers must authenticate allocation generation/actor domains separately in `checked_handle_v1` or the eventual runtime; the CFG facts do not authorize a raw pointer.
+
+The release gate remains actual `cargo test --locked`, compiler integration, native-Wasm executable parity, and proof that abrupt exits/calls cannot bypass cleanup. The source GitHub Actions jobs are still failing before allocating runners; nothing here is claimed as a compiled Rust or guest pass.
+
+## Experimental Polonius-inspired oracle
+
+The standalone `polonius_facts_v1` module adds bounded, point-sensitive loan fact propagation and branch-local liveness, inspired by Rust's Polonius Alpha. Its experimental `analyze_with_inferred_liveness` API derives branch-local lifetime facts backwards from typed-MIR use records, including a positive `Some(return)` / `None(insert, retry)` regression; it still cannot authenticate those source facts. The optional `mir_lifetime_census_v1` bridge compares independent expected/observed typed-MIR event manifests, reconstructs CFG/loan facts, and restricts SSA phi transfers to edge-split points. This checks submitted inventories only; it is **not** source or emitted-code authentication, complete SSA definition checking, or production codegen authority. It does **not** implement full Polonius Alpha, authenticate typed-MIR facts, or permit production V0/cyclic validation to be skipped. See [design and safety limits](docs/POLONIUS_LOAN_FACTS_V1.md).

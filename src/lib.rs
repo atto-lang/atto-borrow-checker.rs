@@ -9,15 +9,30 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 pub mod actor_arena_ref32_v1;
+pub mod actor_ref32_guarded_v1;
+pub mod actor_stack_arena_v1;
 pub mod actor_state_guard_v1;
 pub mod actor_state_runtime_v1;
+pub mod checked_handle_cfg;
+pub mod checked_handle_v1;
+/// Named lt! a binders and inferred lexical argument-borrow region checks.
+/// Separate V1 type model; not a replacement for full MIR lifetime lowering.
+pub mod lifetime_v1;
 pub mod mir_lifetime_census_v1;
 pub mod polonius_facts_v1;
+/// Real host-side Arc/Weak, immutable graph, and Pin<Box<T>> safety model.
+/// Native guest admission still requires independently verified compiler IR.
+pub mod runtime_capabilities_v1;
+/// Source-only path verifier for checked cancellation/lease cleanup and
+/// physical descendant retirement; not a guest scheduler/runtime proof.
+pub mod task_cancel_unwind_v1;
 
 pub type OwnerId = u32;
 pub type LoanId = u32;
 pub type BlockId = u32;
 pub type SharedRegionId = u32;
+/// Compiler-local weak-handle identity, never a guest or host pointer.
+pub type WeakId = u32;
 /// Compiler-local identity of one in-flight mailbox handoff, not a runtime grant.
 pub type SendTicketId = u32;
 
@@ -78,8 +93,43 @@ pub enum Op {
         from: OwnerId,
         into: OwnerId,
     },
+    /// Independent deep object-graph clone: unlike Copy, this does not
+    /// require the type to be trivially Copy, but requires a separate graph
+    /// completeness, alias and allocator witness from trusted lowering.
+    DeepCopy {
+        from: OwnerId,
+        into: OwnerId,
+        graph_proven: bool,
+    },
     Drop {
         owner: OwnerId,
+    },
+    /// Consume an exclusive owner into a deeply immutable, distinct owner.
+    /// The compiler must independently validate the entire reachable graph.
+    Freeze {
+        from: OwnerId,
+        into: OwnerId,
+        deep_proven: bool,
+    },
+    /// Pin pointee storage, NOT the owner handle or its CPU thread.
+    PinStorage {
+        owner: OwnerId,
+        stable_address_proven: bool,
+    },
+    /// Relocation is distinct from moving a pointer-like owning handle.
+    RelocateStorage {
+        owner: OwnerId,
+    },
+    /// Make a non-owning generation-fenced handle to an already frozen region.
+    CreateWeak {
+        region: SharedRegionId,
+        weak: WeakId,
+        generation_fenced: bool,
+    },
+    /// Nullable observation only: does not manufacture a strong owner.
+    ProbeWeak {
+        weak: WeakId,
+        generation_fenced: bool,
     },
     TaskCaptureCopy {
         owner: OwnerId,
@@ -190,7 +240,13 @@ fn shadow_kind(op: &Op) -> (&'static str, Option<OwnerId>) {
         Op::EndBorrow { .. } => ("END_BORROW", None),
         Op::Move { from, .. } => ("MOVE", Some(from)),
         Op::Copy { from, .. } => ("COPY", Some(from)),
+        Op::DeepCopy { from, .. } => ("DEEP_COPY", Some(from)),
         Op::Drop { owner } => ("DROP", Some(owner)),
+        Op::Freeze { from, .. } => ("FREEZE", Some(from)),
+        Op::PinStorage { owner, .. } => ("PIN_STORAGE", Some(owner)),
+        Op::RelocateStorage { owner } => ("RELOCATE_STORAGE", Some(owner)),
+        Op::CreateWeak { .. } => ("CREATE_WEAK", None),
+        Op::ProbeWeak { .. } => ("PROBE_WEAK", None),
         Op::TaskCaptureCopy { owner } => ("TASK_COPY", Some(owner)),
         Op::TaskCaptureMove { owner } => ("TASK_MOVE", Some(owner)),
         Op::Suspend => ("SUSPEND_SAFE", None),
@@ -215,6 +271,10 @@ pub struct Proof {
 struct Owner {
     traits: Traits,
     acquisition: u64,
+    /// Unlike a read-only loan, this excludes ALL reachable mutation.
+    frozen: bool,
+    /// Address stability applies to pointee storage, not the handle.
+    pinned: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -230,6 +290,11 @@ struct State {
     loans: BTreeMap<LoanId, Loan>,
     /// An in-flight send reserves its original semantic owner; no use until settled.
     pending_sends: BTreeMap<SendTicketId, OwnerId>,
+    /// Published shared regions belong to the runtime, not to local owners.
+    published_frozen: BTreeSet<SharedRegionId>,
+    /// Weak handles do NOT extend the region's lifetime.
+    weak_regions: BTreeMap<WeakId, SharedRegionId>,
+    ever_weak: BTreeSet<WeakId>,
     ever_loaned: BTreeSet<LoanId>,
     next_acquisition: u64,
 }
@@ -268,6 +333,8 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
         | Op::Borrow { owner, .. }
         | Op::WriteThrough { owner, .. }
         | Op::Drop { owner }
+        | Op::PinStorage { owner, .. }
+        | Op::RelocateStorage { owner }
         | Op::TaskCaptureCopy { owner }
         | Op::TaskCaptureMove { owner }
         | Op::ActorHopBorrow { owner }
@@ -276,7 +343,10 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
         | Op::ActorSendCopy { owner }
         | Op::PublishFrozen { owner, .. }
         | Op::PromoteGuarded { owner, .. } => Some(owner),
-        Op::Move { from, .. } | Op::Copy { from, .. } => Some(from),
+        Op::Move { from, .. }
+        | Op::Copy { from, .. }
+        | Op::DeepCopy { from, .. }
+        | Op::Freeze { from, .. } => Some(from),
         _ => None,
     };
     if let Some(owner) = accessed_owner {
@@ -296,6 +366,8 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
                 Owner {
                     traits,
                     acquisition,
+                    frozen: false,
+                    pinned: false,
                 },
             );
         }
@@ -308,8 +380,11 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
             }
         }
         Op::Write { owner } => {
-            if !is_live(state, owner) {
+            let Some(value) = state.live.get(&owner) else {
                 return Err(bad("E_USE_AFTER_MOVE_OR_DROP"));
+            };
+            if value.frozen {
+                return Err(bad("E_FROZEN_WRITE"));
             }
             if has_any_loan(state, owner) {
                 return Err(bad("E_BORROW_CONFLICT"));
@@ -318,6 +393,9 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
         Op::Borrow { owner, loan, kind } => {
             if !is_live(state, owner) {
                 return Err(bad("E_USE_AFTER_MOVE_OR_DROP"));
+            }
+            if kind == BorrowKind::Mutable && state.live[&owner].frozen {
+                return Err(bad("E_FROZEN_BORROW_MUT"));
             }
             if state.ever_loaned.contains(&loan) {
                 return Err(bad("E_LOAN_ID_REUSED"));
@@ -336,6 +414,9 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
         Op::WriteThrough { owner, loan } => {
             if !is_live(state, owner) {
                 return Err(bad("E_USE_AFTER_MOVE_OR_DROP"));
+            }
+            if state.live[&owner].frozen {
+                return Err(bad("E_FROZEN_WRITE"));
             }
             if !matches!(state.loans.get(&loan), Some(Loan { owner: o, kind: BorrowKind::Mutable }) if *o == owner)
             {
@@ -376,6 +457,7 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
                 return Err(bad("E_OWNER_ID_REUSED_OR_BUDGET"));
             }
             let traits = source.traits;
+            let frozen = source.frozen;
             let acquisition = next_acquisition(state);
             state.ever_owned.insert(into);
             state.live.insert(
@@ -383,6 +465,44 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
                 Owner {
                     traits,
                     acquisition,
+                    frozen,
+                    // A copied allocation has a distinct address and is not pinned.
+                    pinned: false,
+                },
+            );
+        }
+        Op::DeepCopy {
+            from,
+            into,
+            graph_proven,
+        } => {
+            let source = state
+                .live
+                .get(&from)
+                .ok_or_else(|| bad("E_USE_AFTER_MOVE_OR_DROP"))?;
+            if !graph_proven {
+                return Err(bad("E_DEEP_COPY_PROOF_REQUIRED"));
+            }
+            if has_mut_loan(state, from) {
+                return Err(bad("E_BORROW_CONFLICT"));
+            }
+            if !fresh_destination(state, into) {
+                return Err(bad("E_OWNER_ID_REUSED_OR_BUDGET"));
+            }
+            // The source's logical identity and lifetime are unchanged.
+            // Every reached mutable allocation must be cloned independently
+            // by the backend; this model does not perform that allocation.
+            let traits = source.traits;
+            let frozen = source.frozen;
+            let acquisition = next_acquisition(state);
+            state.ever_owned.insert(into);
+            state.live.insert(
+                into,
+                Owner {
+                    traits,
+                    acquisition,
+                    frozen,
+                    pinned: false,
                 },
             );
         }
@@ -394,6 +514,91 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
                 return Err(bad("E_BORROW_CONFLICT"));
             }
             state.live.remove(&owner);
+        }
+        Op::Freeze {
+            from,
+            into,
+            deep_proven,
+        } => {
+            if !is_live(state, from) {
+                return Err(bad("E_USE_AFTER_MOVE_OR_DROP"));
+            }
+            if !deep_proven {
+                return Err(bad("E_DEEP_FREEZE_PROOF_REQUIRED"));
+            }
+            if has_any_loan(state, from) {
+                return Err(bad("E_BORROW_CONFLICT"));
+            }
+            if state.live[&from].pinned {
+                // V0 cannot certify an in-place layout-preserving freeze.
+                return Err(bad("E_PIN_STORAGE_TRANSFER"));
+            }
+            if !fresh_destination(state, into) {
+                return Err(bad("E_OWNER_ID_REUSED_OR_BUDGET"));
+            }
+            let mut frozen = state.live.remove(&from).expect("checked live");
+            frozen.frozen = true;
+            state.ever_owned.insert(into);
+            state.live.insert(into, frozen);
+        }
+        Op::PinStorage {
+            owner,
+            stable_address_proven,
+        } => {
+            let Some(value) = state.live.get(&owner) else {
+                return Err(bad("E_USE_AFTER_MOVE_OR_DROP"));
+            };
+            if !stable_address_proven {
+                return Err(bad("E_PIN_ADDRESS_PROOF_REQUIRED"));
+            }
+            if has_any_loan(state, owner) {
+                return Err(bad("E_BORROW_CONFLICT"));
+            }
+            if value.pinned {
+                return Err(bad("E_ALREADY_PINNED"));
+            }
+            state.live.get_mut(&owner).expect("checked live").pinned = true;
+        }
+        Op::RelocateStorage { owner } => {
+            let Some(value) = state.live.get(&owner) else {
+                return Err(bad("E_USE_AFTER_MOVE_OR_DROP"));
+            };
+            if value.pinned {
+                return Err(bad("E_PIN_RELOCATION"));
+            }
+            if has_any_loan(state, owner) {
+                return Err(bad("E_BORROW_CONFLICT"));
+            }
+        }
+        Op::CreateWeak {
+            region,
+            weak,
+            generation_fenced,
+        } => {
+            if !generation_fenced {
+                return Err(bad("E_WEAK_GENERATION_PROOF_REQUIRED"));
+            }
+            if !state.published_frozen.contains(&region) {
+                return Err(bad("E_WEAK_SHARED_REGION_REQUIRED"));
+            }
+            if state.ever_weak.contains(&weak) || state.ever_weak.len() >= MAX_LOANS {
+                return Err(bad("E_WEAK_ID_REUSED_OR_BUDGET"));
+            }
+            state.ever_weak.insert(weak);
+            state.weak_regions.insert(weak, region);
+        }
+        Op::ProbeWeak {
+            weak,
+            generation_fenced,
+        } => {
+            if !generation_fenced {
+                return Err(bad("E_WEAK_GENERATION_PROOF_REQUIRED"));
+            }
+            if !state.weak_regions.contains_key(&weak) {
+                return Err(bad("E_UNKNOWN_WEAK"));
+            }
+            // A weak observation is never equivalent to an owning upgrade.
+            // The runtime may return None after reclamation; no owner is added.
         }
         Op::TaskCaptureCopy { owner } => {
             let source = state
@@ -412,6 +617,12 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
                 .live
                 .get(&owner)
                 .ok_or_else(|| bad("E_USE_AFTER_MOVE_OR_DROP"))?;
+            if source.pinned {
+                // A task frame may be relocated on cancellation/reschedule.
+                // Pinning a pointee is not a proof that this backend retains
+                // its allocation address across the task boundary.
+                return Err(bad("E_PIN_BOUNDARY_TRANSFER"));
+            }
             if !source.traits.is_send {
                 return Err(bad("E_TASK_CAPTURE_PROOF"));
             }
@@ -437,6 +648,11 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
                 .live
                 .get(&owner)
                 .ok_or_else(|| bad("E_USE_AFTER_MOVE_OR_DROP"))?;
+            if source.pinned {
+                // Mailbox admission may serialize or copy into a recipient
+                // arena. Without pinned-region handoff proof it MUST reject.
+                return Err(bad("E_PIN_BOUNDARY_TRANSFER"));
+            }
             if !source.traits.is_send {
                 return Err(bad("E_ACTOR_SEND_PROOF_REQUIRED"));
             }
@@ -470,6 +686,12 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
                 .live
                 .get(&owner)
                 .ok_or_else(|| bad("E_USE_AFTER_MOVE_OR_DROP"))?;
+            if source.pinned {
+                // Moving an owner HANDLE within one address-stable arena is
+                // permitted; transferring its storage to a different arena
+                // is not. No backend handoff witness exists in this profile.
+                return Err(bad("E_PIN_BOUNDARY_TRANSFER"));
+            }
             if !source.traits.is_send {
                 return Err(bad("E_ACTOR_SEND_PROOF_REQUIRED"));
             }
@@ -500,6 +722,11 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
                 .live
                 .get(&owner)
                 .ok_or_else(|| bad("E_USE_AFTER_MOVE_OR_DROP"))?;
+            if source.pinned {
+                // Publishing a region may change allocator/arena ownership.
+                // A typed stable-address transfer effect is future work.
+                return Err(bad("E_PIN_BOUNDARY_TRANSFER"));
+            }
             if !source.traits.is_send || !sync_proven {
                 return Err(bad("E_SHARED_FROZEN_PROOF_REQUIRED"));
             }
@@ -509,6 +736,9 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
             // Publication consumes the local owner. The runtime must create
             // independently generation-fenced read-only shared capabilities.
             state.live.remove(&owner);
+            if let Op::PublishFrozen { region, .. } = *op {
+                state.published_frozen.insert(region);
+            }
         }
         Op::Return => {
             if !state.pending_sends.is_empty() {
@@ -591,11 +821,15 @@ fn verify_internal(
     let mut loan_definitions = BTreeSet::new();
     let mut shared_region_definitions = BTreeSet::new();
     let mut send_ticket_definitions = BTreeSet::new();
+    let mut weak_definitions = BTreeSet::new();
     for block in blocks.values() {
         for (index, op) in block.operations.iter().enumerate() {
             let owner = match op {
                 Op::Init { owner, .. } => Some(*owner),
-                Op::Move { into, .. } | Op::Copy { into, .. } => Some(*into),
+                Op::Move { into, .. }
+                | Op::Copy { into, .. }
+                | Op::DeepCopy { into, .. }
+                | Op::Freeze { into, .. } => Some(*into),
                 _ => None,
             };
             if let Some(id) = owner {
@@ -618,6 +852,17 @@ fn verify_internal(
                 }
                 if loan_definitions.len() > MAX_LOANS {
                     return Err(Diagnostic::at("E_LOAN_BUDGET", block.id, index));
+                }
+            }
+            if let Op::CreateWeak { weak, .. } = op {
+                if *weak == 0 {
+                    return Err(Diagnostic::at("E_WEAK_ID_ZERO", block.id, index));
+                }
+                if !weak_definitions.insert(*weak) {
+                    return Err(Diagnostic::at("E_WEAK_DEF_REUSED", block.id, index));
+                }
+                if weak_definitions.len() > MAX_LOANS {
+                    return Err(Diagnostic::at("E_WEAK_BUDGET", block.id, index));
                 }
             }
             if let Op::ActorSendPrepare { ticket, .. } = op {
@@ -777,3 +1022,11 @@ pub mod mir_v1;
 
 /// Explicit field-projection/loop model; not an implicit V0 or MIR upgrade.
 pub mod cyclic_v1;
+
+/// JSON interchange (`atto-borrow-wire-v1`) between backend compilers and the
+/// canonical checker. Dependency-free, strict, bounded.
+pub mod wire_v1;
+
+/// Backend conformance: graph corpus (L1) and backend report
+/// cross-verification (L3). See `docs/CONFORMANCE_PLAN.md`.
+pub mod conformance_v1;
