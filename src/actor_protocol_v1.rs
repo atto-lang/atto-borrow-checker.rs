@@ -173,12 +173,7 @@ struct Facts {
     returned_handles: u8,
 }
 
-fn live<'a>(
-    facts: &'a Facts,
-    id: PlaceId,
-    block: BlockId,
-    i: usize,
-) -> Result<&'a Owner, Diagnostic> {
+fn live(facts: &Facts, id: PlaceId, block: BlockId, i: usize) -> Result<&Owner, Diagnostic> {
     match facts.owners.get(&id) {
         Some(x) if !x.maybe_absent && !x.states.is_empty() => Ok(x),
         _ => Err(err("E_PROTOCOL_HANDLE_NOT_LIVE", block, i)),

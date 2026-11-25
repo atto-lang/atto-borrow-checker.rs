@@ -284,9 +284,9 @@ fn checked_protocols(
     Ok(by_id)
 }
 
-fn graph(
-    program: &Program,
-) -> Result<(BTreeMap<BlockId, &Block>, Vec<BlockId>, usize), Diagnostic> {
+type Graph<'a> = (BTreeMap<BlockId, &'a Block>, Vec<BlockId>, usize);
+
+fn graph(program: &Program) -> Result<Graph<'_>, Diagnostic> {
     if program.blocks.is_empty() || program.blocks.len() > MAX_BLOCKS {
         return Err(err("E_TYPESTATE_CFG_BUDGET", 0, 0));
     }
@@ -415,12 +415,7 @@ fn join(into: &mut Facts, rhs: &Facts, block: BlockId) -> Result<(), Diagnostic>
     Ok(())
 }
 
-fn live<'a>(
-    facts: &'a Facts,
-    place: PlaceId,
-    block: BlockId,
-    i: usize,
-) -> Result<&'a Fact, Diagnostic> {
+fn live(facts: &Facts, place: PlaceId, block: BlockId, i: usize) -> Result<&Fact, Diagnostic> {
     let fact = facts
         .places
         .get(&place)
@@ -446,12 +441,11 @@ fn apply_method(
     protocols: &BTreeMap<ProtocolId, &Protocol>,
     place: PlaceId,
     method_name: &str,
-    through: Option<BorrowKind>,
-    receiver: Access,
-    awaited: bool,
+    call: (Option<BorrowKind>, Access, bool),
     block: BlockId,
     i: usize,
 ) -> Result<(), Diagnostic> {
+    let (through, receiver, awaited) = call;
     let fact = live(facts, place, block, i)?;
     let protocol = protocols[&fact.protocol];
     let method = protocol
@@ -552,9 +546,7 @@ pub fn verify(program: &Program) -> Result<Proof, Diagnostic> {
                         &protocols,
                         *place,
                         method,
-                        None,
-                        Access::Read,
-                        false,
+                        (None, Access::Read, false),
                         id,
                         i,
                     )?;
@@ -565,9 +557,7 @@ pub fn verify(program: &Program) -> Result<Proof, Diagnostic> {
                         &protocols,
                         *place,
                         method,
-                        None,
-                        Access::Exclusive,
-                        false,
+                        (None, Access::Exclusive, false),
                         id,
                         i,
                     )?;
@@ -587,9 +577,7 @@ pub fn verify(program: &Program) -> Result<Proof, Diagnostic> {
                         &protocols,
                         source.place,
                         method,
-                        Some(source.kind),
-                        mode,
-                        false,
+                        (Some(source.kind), mode, false),
                         id,
                         i,
                     )?;
@@ -608,7 +596,13 @@ pub fn verify(program: &Program) -> Result<Proof, Diagnostic> {
                         Access::Read
                     };
                     apply_method(
-                        &mut facts, &protocols, *place, method, None, mode, true, id, i,
+                        &mut facts,
+                        &protocols,
+                        *place,
+                        method,
+                        (None, mode, true),
+                        id,
+                        i,
                     )?;
                 }
                 Op::BeginAsync {
