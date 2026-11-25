@@ -1,6 +1,12 @@
+> **AI agent instructions (organization-wide):** Before working on code, issues, or pull requests, read and follow the [organization `AGENTS.md`](https://github.com/atto-lang/.github/blob/main/AGENTS.md), including its **merge-first stealth-development policy**. Honor any repository-local `AGENTS.md`, explicit holds, and GitHub-enforced rules.
+
 # AttoLang canonical borrow checker (Rust)
 
-This repository hosts the **shared ownership verification core** for AttoLang. The language contract is canonical, but the fast compiler implementation remains local to each backend: Java/GraalVM, .NET/C#, LLVM/C++, Wasm, and Cranelift/Rust. Forge and the remaining oreslang-source.* compilers are additional conformance targets.
+This repository hosts the **shared ownership verification core** for AttoLang. The language contract is canonical, but the fast compiler implementation remains local to each backend: Java/GraalVM, .NET/C#, LLVM/C++, Wasm, and Cranelift/Rust. Forge and other `atto-source.*` backends are additional conformance targets.
+
+## Canonical naming and specification
+
+[atto-borrow-checker.rs](https://github.com/atto-lang/atto-borrow-checker.rs) is the maintained AttoLang repository. Use `.atto` source, `atto-*` repository names, and [atto-spec](https://github.com/atto-lang/atto-spec) for current language rules (ownership, borrowing, effects, actors, and syntax). Distinguish proposed and parser-only features from independently executed compiler support in [atto-platform-conformance](https://github.com/atto-lang/atto-platform-conformance). Naming migration does not by itself rename implementation artifacts, guarantee backend compatibility or certify guest execution.
 
 ## Hybrid compiler architecture
 
@@ -9,6 +15,9 @@ Compiler-local type inference, ownership state changes and CFG construction can 
 See [hybrid integration design](docs/HYBRID_COMPILER_INTEGRATION.md).
 
 ## Current implementation
+
+`actor_arena_ref32_v1` models nonzero 32-bit arena-relative offsets, per-actor/arena/generation identity, allocation extents and alignment, overflow-denial, and stale-retirement rejection. Its independent Rust tests are **model-only**: there is no actual native heap, pointer, physical shared-memory guard, compiler lowering, or quiescence proof in this module. Backend integrations must retain arena/domain/generation metadata outside the 32-bit guest offset, verify each access, and separately enforce loan and physical-retirement rules.
+
 
 `src/lib.rs` implements a deterministic, bounded **V0 CFG ownership oracle** with move/copy/drop, shared/exclusive loans, task capture Copy and Send distinctions, conservative suspension and actor-hop fences, branch joins, and exit cleanup-order proposals. It is intentionally not a complete compiler or actor lifetime checker.
 
@@ -42,4 +51,8 @@ V0 now also distinguishes actor-owned mailbox moves and Copy+Send snapshots from
 
 `mir_v1::verify_mir_with_shadow_v0` validates the full operation inventory and input budgets before canonical verification, and publishes observations only after the entire CFG succeeds. Native compiler adapters remain responsible for independently deriving the complete typed inventory.
 
-Related work: [AttoLang shared conformance](https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/pull/646) and [broader Rust static analysis](https://github.com/ores-truffle-oreslang/oreslang-static-analysis.rs).
+## Backend conformance
+
+Each `atto-source.*` compiler keeps its own in-pass borrow checker; this crate is the master oracle that cross-verifies them. [`docs/CONFORMANCE_PLAN.md`](docs/CONFORMANCE_PLAN.md) defines three levels: L1 graph corpus with exact codes, L2 `.atto` source fixtures with family codes, and L3 re-verification of each backend's exported MIR. The `atto-borrow-conform` binary runs L1 and L3 over the formats in [`docs/WIRE_FORMAT_V1.md`](docs/WIRE_FORMAT_V1.md). The library still has no external dependencies.
+
+Related work: [AttoLang platform conformance](https://github.com/atto-lang/atto-platform-conformance) and [Rust static analysis](https://github.com/atto-lang/atto-static-analysis.rs).
