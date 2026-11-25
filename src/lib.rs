@@ -18,6 +18,8 @@ pub mod checked_handle_v1;
 /// Named lt! a binders and inferred lexical argument-borrow region checks.
 /// Separate V1 type model; not a replacement for full MIR lifetime lowering.
 pub mod lifetime_v1;
+pub mod mir_lifetime_census_v1;
+pub mod polonius_facts_v1;
 /// Real host-side Arc/Weak, immutable graph, and Pin<Box<T>> safety model.
 /// Native guest admission still requires independently verified compiler IR.
 pub mod runtime_capabilities_v1;
