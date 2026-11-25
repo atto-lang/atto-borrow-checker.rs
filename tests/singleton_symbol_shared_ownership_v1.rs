@@ -17,7 +17,10 @@ fn concurrent_readers_are_admitted_before_a_queued_writer() {
 
     let writer_ticket = queue.request(13, 7, Mode::Write).unwrap();
     let later_reader_ticket = queue.request(14, 7, Mode::Read).unwrap();
-    assert!(queue.admit_ready().is_empty(), "writer must not overtake live readers");
+    assert!(
+        queue.admit_ready().is_empty(),
+        "writer must not overtake live readers"
+    );
     assert_eq!(
         queue.access(&readers[0], 11, true),
         Err(GuardError::WriteRequiresExclusive)
@@ -31,7 +34,10 @@ fn concurrent_readers_are_admitted_before_a_queued_writer() {
     assert_eq!(writers.len(), 1);
     assert_eq!(writers[0].ticket(), writer_ticket);
     assert_eq!(queue.access(&writers[0], 13, true), Ok(()));
-    assert!(queue.admit_ready().is_empty(), "reader may not overtake writer");
+    assert!(
+        queue.admit_ready().is_empty(),
+        "reader may not overtake writer"
+    );
 
     queue.release(&writers[0], 13).unwrap();
     let late_readers = queue.admit_ready();
@@ -86,7 +92,10 @@ fn retired_region_fences_stale_tokens_until_physical_release() {
         queue.release(&scope, 41),
         Err(GuardError::PhysicalQuiescenceRequired)
     );
-    assert!(!queue.may_reclaim(), "logical STOP is not physical quiescence");
+    assert!(
+        !queue.may_reclaim(),
+        "logical STOP is not physical quiescence"
+    );
     queue.complete_physical_quiescence(&scope, 41).unwrap();
     assert!(queue.may_reclaim());
     assert_eq!(queue.request(41, 22, Mode::Read), Err(GuardError::Retired));
@@ -127,6 +136,12 @@ fn physical_region_stop_never_exposes_a_stale_read_callback() {
 
     let result: Result<(), RuntimeError> =
         region.execute_read(scope, |_| panic!("stale read callback executed"));
-    assert_eq!(result, Err(RuntimeError::Guard(GuardError::StaleGeneration)));
-    assert!(region.may_reclaim().unwrap(), "scope drop must retire physical loan");
+    assert_eq!(
+        result,
+        Err(RuntimeError::Guard(GuardError::StaleGeneration))
+    );
+    assert!(
+        region.may_reclaim().unwrap(),
+        "scope drop must retire physical loan"
+    );
 }
