@@ -1,0 +1,24 @@
+# atto-borrow-conformance/v1; SHA-256 of the exact UTF-8 bytes is the corpus binding.
+# case_id<TAB>profile<TAB>decision<TAB>diagnostic (use '-' for an allowed case)
+C01	mir-v0-acyclic	allow	-
+C02	mir-v0-acyclic	allow	-
+C03	mir-v0-acyclic	reject	E_USE_AFTER_MOVE_OR_DROP
+C04	mir-v0-acyclic	reject	E_COPY_PROOF_REQUIRED
+C05	mir-v0-acyclic	allow	-
+C06	mir-v0-acyclic	reject	E_BORROW_CONFLICT
+C07	mir-v0-acyclic	allow	-
+C08	mir-v0-acyclic	reject	E_BORROW_CONFLICT
+C09	mir-v0-acyclic	reject	E_BORROW_CONFLICT
+C10	mir-v0-acyclic	reject	E_SUSPEND_WITH_LIVE_LOAN
+C11	mir-v0-acyclic	allow	-
+C12	mir-v0-acyclic	reject	E_ACTOR_BORROW_ESCAPE
+C13	mir-v0-acyclic	reject	E_TASK_CAPTURE_PROOF
+C14	mir-v0-acyclic	allow	-
+C15	mir-v0-acyclic	reject	E_UNKNOWN_LOAN
+C16	mir-v0-acyclic	reject	E_OWNER_DEF_REUSED
+C17	mir-v0-acyclic	reject	E_LOAN_DEF_REUSED
+C18	mir-v0-acyclic	reject	E_CFG_JOIN_UNPROVEN
+C19	mir-v0-acyclic	reject	E_CFG_CYCLE_UNPROVEN
+C20	mir-v1-envelope	reject	E_MIR_UNSUPPORTED_EFFECT
+C21	mir-v0-acyclic	reject	E_IMPLICIT_EXIT
+C22	mir-v0-acyclic	reject	E_LOAN_ESCAPE
