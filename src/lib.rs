@@ -1013,6 +1013,15 @@ pub mod mir_v1;
 
 /// Explicit field-projection/loop model; not an implicit V0 or MIR upgrade.
 pub mod cyclic_v1;
+
+/// JSON interchange (`atto-borrow-wire-v1`) between backend compilers and the
+/// canonical checker. Dependency-free, strict, bounded.
+pub mod wire_v1;
+
+/// Backend conformance: graph corpus (L1) and backend report
+/// cross-verification (L3). See `docs/CONFORMANCE_PLAN.md`.
+pub mod conformance_v1;
+
 /// Strict standalone verifier of restricted source-bound actor guard event reports.
 pub mod actor_source_mir_v0;
 /// Independent bounded source-derived diamond CFG verifier.
