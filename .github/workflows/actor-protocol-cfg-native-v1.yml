@@ -1,0 +1,47 @@
+name: Actor protocol affine CFG canonical Rust source-only
+on:
+  pull_request:
+    paths:
+      - 'src/actor_protocol_v1.rs'
+      - 'src/lib.rs'
+      - 'tests/actor_protocol_v1.rs'
+      - '.github/workflows/actor-protocol-cfg-native-v1.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  canonical-protocol-cfg:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Verify unmodified exact PR commit and source blobs
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test -z "$(git status --porcelain)"
+          for source in src/actor_protocol_v1.rs tests/actor_protocol_v1.rs; do
+            test "$(git rev-parse HEAD:"$source")" = "$(git hash-object --no-filters "$source")"
+          done
+          echo "ATTO_RUST_PROTOCOL_EXACT_COMMIT=$HEAD_SHA"
+          echo "ATTO_RUST_PROTOCOL_ROOT_TREE=$(git rev-parse HEAD^{tree})"
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
+        with:
+          toolchain: '1.99.1'
+          components: clippy,rustfmt
+      - name: Compile, lint, and execute actual Rust protocol CFG tests
+        run: |
+          set -euo pipefail
+          cargo test --test actor_protocol_v1 --locked
+          cargo test --test actor_protocol_v1 --locked --release
+          cargo fmt --all -- --check
+          cargo clippy --all-targets --locked -- -D warnings
+          echo 'ATTO_ACTOR_PROTOCOL_RUST_MODEL=PASS'
+          echo 'ATTO_ACTOR_PROTOCOL_GUEST=NOT_EXECUTED'
+          echo 'ATTO_ACTOR_PROTOCOL_CANONICAL_COMPILER_ADAPTER=NOT_VERIFIED'

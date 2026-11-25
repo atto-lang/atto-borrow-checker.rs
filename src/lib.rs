@@ -9,14 +9,32 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 pub mod actor_arena_ref32_v1;
+/// Bounded source-derived actor-protocol affine handle and stream-lease CFG oracle.
+/// Independent model: no guest runtime or authenticated EOF capability.
+pub mod actor_protocol_v1;
+pub mod actor_ref32_guarded_v1;
+/// Independent bounded source-derived diamond CFG verifier.
+pub mod actor_source_cfg_v1;
+/// Strict standalone verifier of restricted source-bound actor guard event reports.
+pub mod actor_source_mir_v0;
+pub mod actor_stack_arena_v1;
 pub mod actor_state_guard_v1;
 pub mod actor_state_runtime_v1;
+pub mod checked_handle_cfg;
+pub mod checked_handle_v1;
 /// Named lt! a binders and inferred lexical argument-borrow region checks.
 /// Separate V1 type model; not a replacement for full MIR lifetime lowering.
 pub mod lifetime_v1;
+pub mod mir_lifetime_census_v1;
+pub mod polonius_facts_v1;
 /// Real host-side Arc/Weak, immutable graph, and Pin<Box<T>> safety model.
 /// Native guest admission still requires independently verified compiler IR.
 pub mod runtime_capabilities_v1;
+/// Source-only path verifier for checked cancellation/lease cleanup and
+/// physical descendant retirement; not a guest scheduler/runtime proof.
+pub mod task_cancel_unwind_v1;
+/// Finite resource typestate CFG oracle; model-only, not guest certification.
+pub mod typestate_v1;
 
 pub type OwnerId = u32;
 pub type LoanId = u32;
@@ -1013,3 +1031,11 @@ pub mod mir_v1;
 
 /// Explicit field-projection/loop model; not an implicit V0 or MIR upgrade.
 pub mod cyclic_v1;
+
+/// JSON interchange (`atto-borrow-wire-v1`) between backend compilers and the
+/// canonical checker. Dependency-free, strict, bounded.
+pub mod wire_v1;
+
+/// Backend conformance: graph corpus (L1) and backend report
+/// cross-verification (L3). See `docs/CONFORMANCE_PLAN.md`.
+pub mod conformance_v1;

@@ -51,4 +51,26 @@ V0 now also distinguishes actor-owned mailbox moves and Copy+Send snapshots from
 
 `mir_v1::verify_mir_with_shadow_v0` validates the full operation inventory and input budgets before canonical verification, and publishes observations only after the entire CFG succeeds. Native compiler adapters remain responsible for independently deriving the complete typed inventory.
 
+## Backend conformance
+
+Each `atto-source.*` compiler keeps its own in-pass borrow checker; this crate is the master oracle that cross-verifies them. [`docs/CONFORMANCE_PLAN.md`](docs/CONFORMANCE_PLAN.md) defines three levels: L1 graph corpus with exact codes, L2 `.atto` source fixtures with family codes, and L3 re-verification of each backend's exported MIR. The `atto-borrow-conform` binary runs L1 and L3 over the formats in [`docs/WIRE_FORMAT_V1.md`](docs/WIRE_FORMAT_V1.md). The library still has no external dependencies.
+
 Related work: [AttoLang platform conformance](https://github.com/atto-lang/atto-platform-conformance) and [Rust static analysis](https://github.com/atto-lang/atto-static-analysis.rs).
+
+## Checked-handle syntax/oracle candidate (draft)
+
+`checked_handle_v1` adds an **independent Rust state-machine model**, not a compiler parser or runtime heap. It classifies the syntax pairs `ref!` / `rt ref`, `deref!` / `rt deref`, and `unref!` / `rt unref` as identical operations. The model mints opaque owner/handle/view tokens with actor, model, allocation and generation provenance; unique ownership is consumed by `ref_owned`, multiple immutable views block `unref`, and `unref` consumes the handle and returns the owner. Stale generations, double consumption/release, foreign models and unauthorized identity fail closed. The model now caps outstanding allocations at 4,096 and simultaneous read-view leases at 16,384, with quota failures checked before modifying model state. Five additional tests cover multiple views exiting a lexical Atto `block`, atomic allocation-budget denial, atomic view-budget denial, readonly argument validation without ownership transfer, and rejection of stale/foreign views; the module has eight unit tests total.
+
+**Limitations:** no `.atto` parser, no compiler-MIR operation integration, no physical guest memory, runtime FFI, shared mutable actor transport, pinning or quiescence. This standalone model must not be used to assert backend safety or five-backend parity. The intended compiler-backed first slice is [atto-source.rs PR #264](https://github.com/atto-lang/atto-source.rs/pull/264); broader conformance is tracked by [atto-platform-conformance issue #63](https://github.com/atto-lang/atto-platform-conformance/issues/63). These tests are host-model regressions; compiler and runtime evidence remains separate.
+
+## Path-sensitive checked-handle CFG proof candidate (draft)
+
+The new `checked_handle_cfg` module provides a **separate, bounded all-path lifetime oracle**. Its nodes are explicit `Ref`, `Deref`, `EndView`, `Unref`, `Exit`, `Nop`, `CallUnknown` and `Suspend` operations, connected by CFG successors. Unlike a simple lexical scan, it retains distinct facts at branch joins: an `unref!` in one arm cannot hide a missing `unref!` in the other. It rejects use-after-release, unref with live views, unreleased handles at normal/exceptional exits, unknown call effects, suspension with live handles, and cycles that retain checked handles without a separate progress/cancellation proof.
+
+This is a conservative **Polonius-inspired foundation**, not Polonius itself: no production typed-MIR emitter or source-to-CFG attribution is connected, no field-sensitive projection or NLL region solver is implemented, and no relaxation of the frontend's safe straight-line restriction is justified yet. The oracle limits input to **4,096 CFG nodes and 16,384 distinct states**. Its 8 new Rust unit tests are authored but not yet executed. Callers must authenticate allocation generation/actor domains separately in `checked_handle_v1` or the eventual runtime; the CFG facts do not authorize a raw pointer.
+
+The release gate remains actual `cargo test --locked`, compiler integration, native-Wasm executable parity, and proof that abrupt exits/calls cannot bypass cleanup. The source GitHub Actions jobs are still failing before allocating runners; nothing here is claimed as a compiled Rust or guest pass.
+
+## Experimental Polonius-inspired oracle
+
+The standalone `polonius_facts_v1` module adds bounded, point-sensitive loan fact propagation and branch-local liveness, inspired by Rust's Polonius Alpha. Its experimental `analyze_with_inferred_liveness` API derives branch-local lifetime facts backwards from typed-MIR use records, including a positive `Some(return)` / `None(insert, retry)` regression; it still cannot authenticate those source facts. The optional `mir_lifetime_census_v1` bridge compares independent expected/observed typed-MIR event manifests, reconstructs CFG/loan facts, and restricts SSA phi transfers to edge-split points. This checks submitted inventories only; it is **not** source or emitted-code authentication, complete SSA definition checking, or production codegen authority. It does **not** implement full Polonius Alpha, authenticate typed-MIR facts, or permit production V0/cyclic validation to be skipped. See [design and safety limits](docs/POLONIUS_LOAN_FACTS_V1.md).
