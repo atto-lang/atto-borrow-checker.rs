@@ -9,6 +9,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 pub mod actor_arena_ref32_v1;
+/// Bounded source-derived actor-protocol affine handle and stream-lease CFG oracle.
+/// Independent model: no guest runtime or authenticated EOF capability.
+pub mod actor_protocol_v1;
 pub mod actor_ref32_guarded_v1;
 /// Independent bounded source-derived diamond CFG verifier.
 pub mod actor_source_cfg_v1;
@@ -30,6 +33,8 @@ pub mod runtime_capabilities_v1;
 /// Source-only path verifier for checked cancellation/lease cleanup and
 /// physical descendant retirement; not a guest scheduler/runtime proof.
 pub mod task_cancel_unwind_v1;
+/// Finite resource typestate CFG oracle; model-only, not guest certification.
+pub mod typestate_v1;
 
 pub type OwnerId = u32;
 pub type LoanId = u32;
