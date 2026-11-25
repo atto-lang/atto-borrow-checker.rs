@@ -51,4 +51,8 @@ V0 now also distinguishes actor-owned mailbox moves and Copy+Send snapshots from
 
 `mir_v1::verify_mir_with_shadow_v0` validates the full operation inventory and input budgets before canonical verification, and publishes observations only after the entire CFG succeeds. Native compiler adapters remain responsible for independently deriving the complete typed inventory.
 
+## Backend conformance
+
+Each `atto-source.*` compiler keeps its own in-pass borrow checker; this crate is the master oracle that cross-verifies them. [`docs/CONFORMANCE_PLAN.md`](docs/CONFORMANCE_PLAN.md) defines three levels: L1 graph corpus with exact codes, L2 `.atto` source fixtures with family codes, and L3 re-verification of each backend's exported MIR. The `atto-borrow-conform` binary runs L1 and L3 over the formats in [`docs/WIRE_FORMAT_V1.md`](docs/WIRE_FORMAT_V1.md). The library still has no external dependencies.
+
 Related work: [AttoLang platform conformance](https://github.com/atto-lang/atto-platform-conformance) and [Rust static analysis](https://github.com/atto-lang/atto-static-analysis.rs).
