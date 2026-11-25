@@ -103,9 +103,13 @@ Check one function with `atto-borrow-conform verify-mir fn.json`.
 - `local.code` is required on reject and must be a registry code (canonical
   or family); non-ownership rejects such as `E_SYNTAX` are allowed too.
 - Give exactly one of `mir` and `mirUnavailable` (a reason string).
+- The report compiler SHA must be a 40-digit hexadecimal Git commit SHA.
+  When present, the MIR producer SHA must match it. CI still has to bind
+  the claimed commit to the compiler that produced the report.
 - Optional key: `note`.
 
 Run `atto-borrow-conform cross-check report.jsonl [--allow-stricter] [--require-mir]`.
 The output is JSON Lines, one classified line per record, ending with a
 `summary` line. Exit status is 0 when conformant, 1 when not, and 2 on an
-input error.
+input error. Empty reports are input errors. An unsupported MIR effect
+still requires a valid instruction inventory.

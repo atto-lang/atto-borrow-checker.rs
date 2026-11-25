@@ -375,6 +375,15 @@ fn unknown_effect_requires_unsupported_tag_and_always_rejects() {
     let decoded = decode_mir(&parse_json(&json).unwrap(), "").unwrap();
     let verdict = conformance_v1::verdict_for_mir(&decoded);
     assert_eq!(verdict.code(), Some("E_MIR_UNSUPPORTED_EFFECT"));
+    let missing_inventory = json.replacen(
+        r#""expectedInstructionIds":[1,2]"#,
+        r#""expectedInstructionIds":[1]"#,
+        1,
+    );
+    assert_ne!(missing_inventory, json);
+    let decoded = decode_mir(&parse_json(&missing_inventory).unwrap(), "").unwrap();
+    let verdict = conformance_v1::verdict_for_mir(&decoded);
+    assert_eq!(verdict.code(), Some("E_MIR_INCOMPLETE_INVENTORY"));
     let mistagged = json.replacen(r#""effect":"Unsupported""#, r#""effect":"Control""#, 1);
     assert!(decode_mir(&parse_json(&mistagged).unwrap(), "").is_err());
 }
@@ -450,6 +459,11 @@ fn classification_matrix() {
         ),
         (
             local(true, None),
+            Some(&owner_reuse),
+            CrossClass::AdapterDefect,
+        ),
+        (
+            local(false, Some("E_SYNTAX")),
             Some(&owner_reuse),
             CrossClass::AdapterDefect,
         ),
@@ -552,11 +566,41 @@ fn example_report_classifies_as_documented() {
 
 #[test]
 fn backend_record_requires_exactly_one_of_mir_or_reason() {
-    let base = r#"{"schema":"atto-borrow-backend-report-v1","backend":"java","compilerGitSha":"x","sourcePath":"a.atto","case":null,"function":"main","local":{"verdict":"accept","code":null}"#;
+    let base = r#"{"schema":"atto-borrow-backend-report-v1","backend":"java","compilerGitSha":"0000000000000000000000000000000000000000","sourcePath":"a.atto","case":null,"function":"main","local":{"verdict":"accept","code":null}"#;
+    let valid = format!(r#"{base},"mirUnavailable":"r"}}"#);
+    assert!(decode_backend_record(&parse_json(&valid).unwrap()).is_ok());
     assert!(decode_backend_record(&parse_json(&format!("{base}}}")).unwrap()).is_err());
     let both = format!(r#"{base},"mir":{{}},"mirUnavailable":"r"}}"#);
     assert!(decode_backend_record(&parse_json(&both).unwrap()).is_err());
     let unknown_backend = base.replace("\"java\"", "\"cobol\"");
     let line = format!(r#"{unknown_backend},"mirUnavailable":"r"}}"#);
     assert!(decode_backend_record(&parse_json(&line).unwrap()).is_err());
+}
+
+#[test]
+fn backend_record_requires_consistent_compiler_sha() {
+    let line = EXAMPLE_REPORT.lines().next().unwrap();
+    for (replacement, field) in [
+        ("not-a-sha", "compilerGitSha"),
+        (
+            "1111111111111111111111111111111111111111",
+            "mir.producer.compilerGitSha",
+        ),
+    ] {
+        let changed = line.replacen("0000000000000000000000000000000000000000", replacement, 1);
+        let result = decode_backend_record(&parse_json(&changed).unwrap());
+        assert_eq!(result.unwrap_err().at, field);
+    }
+}
+
+#[test]
+fn cross_check_rejects_empty_report() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_atto-borrow-conform"))
+        .args(["cross-check", "-", "--require-mir"])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("no function records"));
 }

@@ -307,19 +307,21 @@ pub fn verdict_for_graph(graph: &WireGraph) -> Verdict {
 }
 
 pub fn verdict_for_mir(mir: &WireMir) -> Verdict {
-    if let Some((block, _instruction, _kind)) = mir.unsupported.first() {
-        return Verdict::Reject {
-            code: UNSUPPORTED_EFFECT.to_string(),
-            block: Some(*block),
-            operation: None,
-        };
-    }
     return match mir_v1::verify_mir(&mir.function) {
-        Ok(proof) => Verdict::Accept(proof),
+        Ok(proof) if mir.unsupported.is_empty() => Verdict::Accept(proof),
+        Ok(_) => Verdict::Reject {
+            code: "E_MIR_EFFECT_MISMATCH".to_string(),
+            block: None,
+            operation: None,
+        },
         Err(MirError::Unsafe(diagnostic)) => Verdict::from_diagnostic(diagnostic),
         Err(MirError::Invalid(code)) => Verdict::Reject {
             code: code.to_string(),
-            block: None,
+            block: if code == UNSUPPORTED_EFFECT {
+                mir.unsupported.first().map(|(block, _, _)| *block)
+            } else {
+                None
+            },
             operation: None,
         },
     };
@@ -604,6 +606,12 @@ pub fn decode_backend_record(value: &Json) -> Result<BackendRecord, WireError> {
         });
     }
     let compiler_git_sha = f.str("compilerGitSha")?.to_string();
+    if !mir_v1::is_hex(&compiler_git_sha, 40) {
+        return Err(WireError {
+            message: "expected a 40-digit hexadecimal Git commit SHA".into(),
+            at: f.path("compilerGitSha"),
+        });
+    }
     let source_path = f.str("sourcePath")?.to_string();
     let case = f.opt_str("case")?.map(str::to_string);
     let function = f.str("function")?.to_string();
@@ -630,7 +638,16 @@ pub fn decode_backend_record(value: &Json) -> Result<BackendRecord, WireError> {
     lf.finish_allowing(&["message"])?;
 
     let mir = match (f.opt("mir"), f.opt_str("mirUnavailable")?) {
-        (Some(mir), None) => Ok(wire_v1::decode_mir(mir, "mir")?),
+        (Some(mir), None) => {
+            let mir = wire_v1::decode_mir(mir, "mir")?;
+            if !compiler_git_sha.eq_ignore_ascii_case(&mir.function.producer.compiler_git_sha) {
+                return Err(WireError {
+                    message: "MIR producer SHA must match report compilerGitSha".into(),
+                    at: "mir.producer.compilerGitSha".into(),
+                });
+            }
+            Ok(mir)
+        }
         (None, Some(reason)) => Err(reason.to_string()),
         _ => {
             return Err(WireError {
@@ -711,6 +728,12 @@ impl CrossClass {
 }
 
 pub fn classify(local: &LocalVerdict, canonical: Option<&Verdict>) -> CrossClass {
+    let canonical_class = canonical
+        .and_then(Verdict::code)
+        .map(|code| code_info(code).map_or(CodeClass::Adapter, |info| info.class));
+    if canonical_class == Some(CodeClass::Adapter) {
+        return CrossClass::AdapterDefect;
+    }
     if !local.accept {
         let code = local.code.as_deref().unwrap_or_default();
         if !is_ownership_code(code) {
@@ -720,13 +743,11 @@ pub fn classify(local: &LocalVerdict, canonical: Option<&Verdict>) -> CrossClass
     let Some(canonical) = canonical else {
         return CrossClass::NotExported;
     };
-    let canonical_class = canonical
-        .code()
-        .map(|code| code_info(code).map_or(CodeClass::Adapter, |info| info.class));
-    match canonical_class {
-        Some(CodeClass::Adapter) => return CrossClass::AdapterDefect,
-        Some(CodeClass::ModelLimit | CodeClass::Budget) => return CrossClass::OutOfScope,
-        Some(CodeClass::Semantic) | None => {}
+    if matches!(
+        canonical_class,
+        Some(CodeClass::ModelLimit | CodeClass::Budget)
+    ) {
+        return CrossClass::OutOfScope;
     }
     return match (local.accept, canonical) {
         (true, Verdict::Accept(_)) => CrossClass::Agree,
