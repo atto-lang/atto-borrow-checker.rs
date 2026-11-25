@@ -883,7 +883,7 @@ pub fn decode_mir(value: &Json, at: &str) -> Result<WireMir, WireError> {
                         ));
                     }
                     unsupported.push((id, instruction_id, kind));
-                    // Placeholder never reaches the checker: see `unsupported`.
+                    // MIR envelope validation rejects this effect before lowering.
                     Op::Return
                 }
             };

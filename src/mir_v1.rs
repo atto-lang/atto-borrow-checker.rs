@@ -67,7 +67,7 @@ pub enum MirError {
     Unsafe(Diagnostic),
 }
 
-fn is_hex(value: &str, expected_len: usize) -> bool {
+pub(crate) fn is_hex(value: &str, expected_len: usize) -> bool {
     value.len() == expected_len && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
@@ -148,6 +148,7 @@ fn validate_and_lower(function: &MirFunction) -> Result<Program, MirError> {
         }
     }
     let mut observed = BTreeSet::new();
+    let mut unsupported = false;
     let mut total = 0usize;
     let mut blocks = Vec::with_capacity(function.blocks.len());
     for block in &function.blocks {
@@ -164,9 +165,8 @@ fn validate_and_lower(function: &MirFunction) -> Result<Program, MirError> {
                 return Err(MirError::Invalid("E_MIR_DUPLICATE_OR_MISSING_ID"));
             }
             if instruction.effect == Effect::Unsupported {
-                return Err(MirError::Invalid("E_MIR_UNSUPPORTED_EFFECT"));
-            }
-            if instruction.effect != expected_effect(&instruction.operation) {
+                unsupported = true;
+            } else if instruction.effect != expected_effect(&instruction.operation) {
                 return Err(MirError::Invalid("E_MIR_EFFECT_MISMATCH"));
             }
             ops.push(instruction.operation.clone());
@@ -179,6 +179,9 @@ fn validate_and_lower(function: &MirFunction) -> Result<Program, MirError> {
     }
     if expected != observed {
         return Err(MirError::Invalid("E_MIR_INCOMPLETE_INVENTORY"));
+    }
+    if unsupported {
+        return Err(MirError::Invalid("E_MIR_UNSUPPORTED_EFFECT"));
     }
     return Ok(Program {
         entry: function.entry,
