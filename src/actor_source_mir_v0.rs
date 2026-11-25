@@ -18,8 +18,11 @@ pub struct GuardReceipt {
 }
 
 fn parse_uint(text: &str) -> Result<usize, &'static str> {
-    if text.is_empty() || text.len() > 10 || !text.bytes().all(|b| b.is_ascii_digit()) ||
-       (text.len() > 1 && text.starts_with('0')) {
+    if text.is_empty()
+        || text.len() > 10
+        || !text.bytes().all(|b| b.is_ascii_digit())
+        || (text.len() > 1 && text.starts_with('0'))
+    {
         return Err("noncanonical integer");
     }
     text.parse::<usize>().map_err(|_| "integer overflows")
@@ -36,15 +39,25 @@ fn fields<'a>(line: &'a str, prefix: &str, expected: usize) -> Result<Vec<&'a st
 /// Reject unknown fields, malformed/oversized reports, forbidden writes, and
 /// event lifetimes before running the independent Rust cyclic borrow oracle.
 pub fn verify_bounded_guard_wire(input: &str) -> Result<GuardReceipt, String> {
-    if input.is_empty() || input.len() > MAX_BYTES ||
-       input.bytes().any(|b| b == b'\r' || b == b'\0') || !input.ends_with('\n') {
+    if input.is_empty()
+        || input.len() > MAX_BYTES
+        || input.bytes().any(|b| b == b'\r' || b == b'\0')
+        || !input.ends_with('\n')
+    {
         return Err("invalid bounded report bytes".into());
     }
     let mut ls = input.lines();
-    let first = fields(ls.next().ok_or("no wire header")?, "ATTO_ACTOR_STATE_MIR_V0", 2)?;
+    let first = fields(
+        ls.next().ok_or("no wire header")?,
+        "ATTO_ACTOR_STATE_MIR_V0",
+        2,
+    )?;
     let digest = first[1];
-    if digest.len() != 64 ||
-       !digest.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
+    if digest.len() != 64
+        || !digest
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
         return Err("invalid source digest".into());
     }
     let root = fields(ls.next().ok_or("missing root")?, "ROOT", 3)?;
@@ -65,8 +78,13 @@ pub fn verify_bounded_guard_wire(input: &str) -> Result<GuardReceipt, String> {
         _ => return Err("unknown loan kind".into()),
     };
     let mut ops = vec![Op::Borrow {
-        loan: 1, place: Place::root(1),
-        kind: if exclusive { LoanKind::Exclusive } else { LoanKind::Shared },
+        loan: 1,
+        place: Place::root(1),
+        kind: if exclusive {
+            LoanKind::Exclusive
+        } else {
+            LoanKind::Shared
+        },
     }];
     let mut event_count = 0;
     loop {
@@ -100,14 +118,24 @@ pub fn verify_bounded_guard_wire(input: &str) -> Result<GuardReceipt, String> {
     }
     ops.push(Op::EndLoan(1));
     let ir = Program {
-        roots: vec![Root { id: 1, is_copy: false, is_transferable: false }],
-        blocks: vec![Block { id: 0, ops, successors: vec![] }],
+        roots: vec![Root {
+            id: 1,
+            is_copy: false,
+            is_transferable: false,
+        }],
+        blocks: vec![Block {
+            id: 0,
+            ops,
+            successors: vec![],
+        }],
         entry: 0,
     };
-    cyclic_v1::check(&ir).map_err(|e| format!(
-        "canonical borrow checker rejected guard events: {:?}, block {}, op {}",
-        e.code, e.block, e.operation
-    ))?;
+    cyclic_v1::check(&ir).map_err(|e| {
+        format!(
+            "canonical borrow checker rejected guard events: {:?}, block {}, op {}",
+            e.code, e.block, e.operation
+        )
+    })?;
     Ok(GuardReceipt {
         source_sha256: digest.to_string(),
         event_count,
