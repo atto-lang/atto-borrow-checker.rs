@@ -10,6 +10,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub mod actor_arena_ref32_v1;
 pub mod actor_ref32_guarded_v1;
+/// Independent bounded source-derived diamond CFG verifier.
+pub mod actor_source_cfg_v1;
+/// Strict standalone verifier of restricted source-bound actor guard event reports.
+pub mod actor_source_mir_v0;
 pub mod actor_stack_arena_v1;
 pub mod actor_state_guard_v1;
 pub mod actor_state_runtime_v1;

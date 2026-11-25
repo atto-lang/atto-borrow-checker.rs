@@ -31,25 +31,25 @@ fn two_readers_are_physically_concurrent_and_writer_cannot_barge() {
     assert_eq!(scopes.len(), 2);
     let barrier = Arc::new(Barrier::new(3));
     let (entered_tx, entered_rx) = mpsc::channel();
-    let handles: Vec<_> = scopes
-        .into_iter()
-        .map(|scope| {
-            let state = Arc::clone(&state);
-            let barrier = Arc::clone(&barrier);
-            let entered_tx = entered_tx.clone();
-            thread::spawn(move || {
-                state
-                    .execute_read(scope, |v| {
-                        entered_tx.send(()).unwrap();
-                        barrier.wait();
-                        *v
-                    })
-                    .unwrap()
-            })
-        })
-        .collect();
-    entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
-    entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    let mut handles = Vec::new();
+    for scope in scopes {
+        let state = Arc::clone(&state);
+        let barrier = Arc::clone(&barrier);
+        let entered_tx = entered_tx.clone();
+        handles.push(thread::spawn(move || {
+            state
+                .execute_read(scope, |v| {
+                    entered_tx.send(()).unwrap();
+                    barrier.wait();
+                    *v
+                })
+                .unwrap()
+        }));
+        // Entry briefly takes the nonblocking queue mutex. Wait for that
+        // phase to finish before starting the next reader; both callbacks
+        // still hold their physical read guards at the barrier.
+        entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    }
     state.request(3, 2, Mode::Write).unwrap();
     state.request(4, 2, Mode::Read).unwrap();
     assert!(state.admit_ready().unwrap().is_empty());
