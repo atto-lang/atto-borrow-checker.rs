@@ -159,3 +159,53 @@ fn live_overlapping_issuances_require_both_loans_shared() {
     assert!(analyze_manifest(&overlapping_issuance(0, 0, 0)).is_ok());
     assert!(analyze_manifest(&overlapping_issuance(1, 1, 1)).is_ok());
 }
+
+#[test]
+fn nonreturn_sink_rejects_before_ssa() {
+    let source = format!("{CONTRACT}\nF|main|1|1\nP|1|V|0|0|0|0|-|-|-|0|0\nEND\n");
+    assert_eq!(
+        analyze_manifest(&source).unwrap_err(),
+        BridgeError::Invalid("E_WIRE_NONRETURN_SINK")
+    );
+}
+
+#[test]
+fn reachable_cycle_with_return_exit_is_outside_v1() {
+    let source = format!(
+        "{CONTRACT}\nF|main|1|4\n\
+P|1|V|0|0|0|0|2|-|-|0|0\n\
+P|2|C|0|0|0|0|3,4|-|-|0|0\n\
+P|3|V|0|0|0|0|2|-|-|0|0\n\
+P|4|R|0|0|0|0|-|-|-|0|0\nEND\n"
+    );
+    assert_eq!(
+        analyze_manifest(&source).unwrap_err(),
+        BridgeError::Invalid("E_WIRE_CFG_NOT_CLOSED_DAG")
+    );
+}
+
+#[test]
+fn closed_diamond_with_join_is_admitted() {
+    let source = format!(
+        "{CONTRACT}\nF|main|1|4\n\
+P|1|C|0|0|0|0|2,3|-|-|0|0\n\
+P|2|V|0|0|0|0|4|-|-|0|0\n\
+P|3|V|0|0|0|0|4|-|-|0|0\n\
+P|4|R|0|0|0|0|-|-|-|0|0\nEND\n"
+    );
+    assert!(analyze_manifest(&source).is_ok());
+}
+
+#[test]
+fn disconnected_cycle_is_outside_v1() {
+    let source = format!(
+        "{CONTRACT}\nF|main|1|3\n\
+P|1|R|0|0|0|0|-|-|-|0|0\n\
+P|2|V|0|0|0|0|3|-|-|0|0\n\
+P|3|V|0|0|0|0|2|-|-|0|0\nEND\n"
+    );
+    assert_eq!(
+        analyze_manifest(&source).unwrap_err(),
+        BridgeError::Invalid("E_WIRE_CFG_NOT_CLOSED_DAG")
+    );
+}
