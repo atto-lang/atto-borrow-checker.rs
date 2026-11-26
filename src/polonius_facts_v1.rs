@@ -576,7 +576,10 @@ mod inference_preflight_tests {
         let mut first = point(1, vec![2]);
         first.issue.push((1, 1));
         let mut second = point(2, Vec::new());
-        let uses = [OriginUse { point: 2, origin: 1 }];
+        let uses = [OriginUse {
+            point: 2,
+            origin: 1,
+        }];
         let template = Facts {
             entry: 1,
             points: vec![first.clone(), second.clone()],
