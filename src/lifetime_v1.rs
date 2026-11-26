@@ -8,6 +8,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 const MAX_SCOPE_DEPTH: usize = 128;
 const MAX_BINDERS: usize = 1024;
+// Bound retained identifier bytes and the historical owner-ID census.
+const MAX_BINDER_BYTES: usize = 256;
+const MAX_OWNERS: usize = 4096;
 const MAX_LOANS: usize = 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,6 +78,9 @@ impl Lifetimes {
     /// Both lt! a and lifetime! a are type-level binders; Rust apostrophe
     /// lifetime names are intentionally invalid AttoLang.
     pub fn bind(&mut self, name: &str) -> Result<(), Error> {
+        if name.len() > MAX_BINDER_BYTES {
+            return Err(Error::ScopeBudget);
+        }
         if name.is_empty()
             || !name
                 .bytes()
@@ -125,9 +131,13 @@ impl Lifetimes {
         Ok(())
     }
     pub fn own(&mut self, id: OwnerId) -> Result<(), Error> {
-        if id == 0 || !self.seen_owners.insert(id) {
+        if id == 0 || self.seen_owners.contains(&id) {
             return Err(Error::DuplicateOwner);
         }
+        if self.seen_owners.len() >= MAX_OWNERS {
+            return Err(Error::ScopeBudget);
+        }
+        self.seen_owners.insert(id);
         self.owners.insert(id, self.depth());
         self.scopes.last_mut().expect("root exists").owners.push(id);
         Ok(())
@@ -166,8 +176,11 @@ impl Lifetimes {
         if binder_depth < owner_depth {
             return Err(Error::OutlivesOwner);
         }
-        if loan == 0 || self.seen_loans.len() >= MAX_LOANS || self.seen_loans.contains(&loan) {
+        if loan == 0 || self.seen_loans.contains(&loan) {
             return Err(Error::DuplicateLoan);
+        }
+        if self.seen_loans.len() >= MAX_LOANS {
+            return Err(Error::ScopeBudget);
         }
         let mutable = kind == BorrowKind::Mutable;
         if self
