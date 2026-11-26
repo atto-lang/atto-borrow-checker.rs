@@ -194,6 +194,29 @@ fn one_function(name: String, entry: u32, rows: Vec<Row>) -> Result<FunctionRepo
     if ids.len() != count || incoming[entry as usize] != 0 {
         return Err(invalid("E_WIRE_CFG_ENTRY_OR_GAPS"));
     }
+    // V1 is a closed, acyclic diagnostic profile. Reject non-return sinks
+    // and cycles before invoking the SSA solver.
+    let mut adjacency = vec![Vec::new(); count + 1];
+    for r in &rows {
+        if r.succ.is_empty() && r.kind != Kind::Return {
+            return Err(invalid("E_WIRE_NONRETURN_SINK"));
+        }
+        adjacency[r.id as usize] = r.succ.clone();
+    }
+    let mut ready = std::collections::VecDeque::from([entry]);
+    let mut visited = 0usize;
+    while let Some(id) = ready.pop_front() {
+        visited += 1;
+        for &next in &adjacency[id as usize] {
+            incoming[next as usize] -= 1;
+            if incoming[next as usize] == 0 {
+                ready.push_back(next);
+            }
+        }
+    }
+    if visited != count {
+        return Err(invalid("E_WIRE_CFG_NOT_CLOSED_DAG"));
+    }
     let mut owners = BTreeMap::<u32, (u32, bool)>::new();
     for r in &rows {
         if r.kind == Kind::Issue && owners.insert(r.loan, (r.owner, r.flag == 1)).is_some() {
