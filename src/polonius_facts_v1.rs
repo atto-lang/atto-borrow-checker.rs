@@ -332,6 +332,25 @@ pub fn analyze_with_inferred_liveness(
         return Err(error(Code::Budget, template.entry));
     }
 
+    // The inferred path must bound the raw template before inspecting or
+    // copying any fact vector. The forward preflight alone runs too late.
+    let mut raw_facts = 0usize;
+    for point in &template.points {
+        let count = point
+            .issue
+            .len()
+            .checked_add(point.subset.len())
+            .and_then(|n| n.checked_add(point.kill.len()))
+            .and_then(|n| n.checked_add(point.invalidate.len()))
+            .ok_or_else(|| error(Code::Budget, point.id))?;
+        raw_facts = raw_facts
+            .checked_add(count)
+            .ok_or_else(|| error(Code::Budget, point.id))?;
+        if raw_facts > MAX_INPUT_FACTS {
+            return Err(error(Code::Budget, point.id));
+        }
+    }
+
     let mut points = BTreeMap::new();
     let mut predecessors: BTreeMap<PointId, Vec<PointId>> = BTreeMap::new();
     let mut live: BTreeMap<PointId, BTreeSet<OriginId>> = BTreeMap::new();
@@ -504,4 +523,79 @@ pub fn analyze_with_inferred_liveness(
         loans,
         inference_steps: steps,
     })
+}
+
+#[cfg(test)]
+mod inference_preflight_tests {
+    use super::*;
+
+    fn point(id: PointId, successors: Vec<PointId>) -> Point {
+        Point {
+            id,
+            successors,
+            live_origins: Vec::new(),
+            subset: Vec::new(),
+            issue: Vec::new(),
+            kill: Vec::new(),
+            invalidate: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn oversized_raw_subset_is_denied_before_fact_inspection() {
+        let mut p = point(1, Vec::new());
+        p.subset = vec![(0, 0); MAX_INPUT_FACTS + 1];
+        let template = Facts {
+            entry: 1,
+            points: vec![p],
+        };
+        assert_eq!(
+            analyze_with_inferred_liveness(&template, &[]),
+            Err(error(Code::Budget, 1))
+        );
+    }
+
+    #[test]
+    fn raw_fact_budget_is_aggregate_across_points_and_kinds() {
+        let mut first = point(1, vec![2]);
+        let mut second = point(2, Vec::new());
+        first.kill = vec![1; MAX_INPUT_FACTS / 2];
+        second.invalidate = vec![1; MAX_INPUT_FACTS / 2 + 1];
+        let template = Facts {
+            entry: 1,
+            points: vec![first, second],
+        };
+        assert_eq!(
+            analyze_with_inferred_liveness(&template, &[]),
+            Err(error(Code::Budget, 2))
+        );
+    }
+
+    #[test]
+    fn bounded_input_retains_existing_inference_and_semantic_checks() {
+        let mut first = point(1, vec![2]);
+        first.issue.push((1, 1));
+        let mut second = point(2, Vec::new());
+        let uses = [OriginUse { point: 2, origin: 1 }];
+        let template = Facts {
+            entry: 1,
+            points: vec![first.clone(), second.clone()],
+        };
+        let report = analyze_with_inferred_liveness(&template, &uses).unwrap();
+        assert!(report.loans.live_loans_on_entry[&2].contains(&1));
+
+        second.invalidate.push(1);
+        let template = Facts {
+            entry: 1,
+            points: vec![first, second],
+        };
+        assert_eq!(
+            analyze_with_inferred_liveness(&template, &uses),
+            Err(Error {
+                code: Code::InvalidatedLoan,
+                point: 2,
+                loan: Some(1),
+            })
+        );
+    }
 }
