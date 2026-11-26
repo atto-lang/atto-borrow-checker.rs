@@ -10,6 +10,10 @@ publish = false
 name = "atto_borrow_checker"
 path = "src/lib.rs"
 
+[[bin]]
+name = "atto-cfg-ssa-check"
+path = "src/bin/atto_cfg_ssa_check.rs"
+
 [dependencies]
 
 [lints.clippy]
