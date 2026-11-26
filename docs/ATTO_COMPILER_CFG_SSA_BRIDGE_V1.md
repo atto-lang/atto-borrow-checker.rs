@@ -35,3 +35,12 @@ loan loads. Issuing a loan invalidates overlapping live loans if either is
 exclusive; distinct owner roots and shared/shared loans remain admissible.
 Direct-read invalidation visits each known loan once per instruction. These
 checks remain diagnostic-only and assume truthful canonical alias roots.
+
+V1 additionally requires a closed DAG with an explicit Return at every sink.
+The preflight visits the entry-rooted topological inventory before any SSA
+work and rejects non-return sinks, disconnected inventory and cyclic CFGs.
+This is a deliberate conservative profile restriction, not a loop/lifetime
+solver. Valid acyclic diamonds still admit. Future cyclic support must be
+introduced via a versioned producer/consumer contract with independent loop,
+phi, unwind and cancellation proofs. Four dedicated regression tests cover
+these cases; exact-head Rust execution remains required.
