@@ -8,10 +8,14 @@ This module admits or rejects a compiler-authenticated copy request over one
 closed-world set of concrete type descriptors. copy! and copy!! have
 **different witnesses and different alias guarantees**:
 
-- **Shallow**: duplicate the concrete root and inline scalars. Owned mutable
-  child fields block shallow copying. A SharedMutable child can remain aliased
-  only outside the actor-send route; actual sharing still requires a trusted
-  runtime authorization and correct lifetime management.
+- **Shallow**: duplicate the concrete root and inline scalars. The current
+  descriptor-only model denies both OwnedMutable and SharedMutable children:
+  ordinary sharing and nominal type membership do not prove the transitive
+  read-only loan required by atto-spec#251. This is conservative admission,
+  not a final ban on reference-bearing shallow copies. Future compiler-bound
+  admission must prove exclusion of writes through the original, the copy,
+  and every alias, scoped retention and cleanup, and independent writable
+  slots for fresh replacements. Actor-private mutable sharing remains denied.
 - **Deep**: compiler must generate and statically link functions that allocate
   fresh mutable children recursively, including previously shared mutable
   fields, while preserving internal repeated references and cycles using one
@@ -52,9 +56,10 @@ budgets require additional runtime-profile proofs.
 1. Parse prefix copy! and contiguous copy!!, preserving mode and
    evaluate-once semantics in typed IR. copy() / copy_deep() have zero
    user arguments.
-2. Infer distinct Copyable<Self> and DeepCopyable<Self> capabilities from
-   all stored fields and inherited state. Do not grant them merely because a
-   method named copy_deep exists.
+2. Derive a separate verified Copyable<Self> plan and require explicit
+   nominal DeepCopyable<Self> consent plus a verified recursive witness for
+   all stored fields and inherited state. Do not grant either from a method
+   name alone. The model's witness booleans are not consent authentication.
 3. Attach authenticated concrete type, closed-world dispatch witnesses,
    field layout/version and actor destination provenance to the typed
    copy instruction. Reject unknown or noncopyable fields.
