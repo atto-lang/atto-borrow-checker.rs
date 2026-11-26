@@ -59,12 +59,16 @@ fn deep_copyability_does_not_imply_shallow_copyability() {
 }
 
 #[test]
-fn a_shareable_mutable_child_is_shallow_copyable_but_not_actor_sendable() {
+fn ordinary_mutable_sharing_is_not_a_shallow_readonly_loan_witness() {
     let types = [
         ty(1, None, vec![field(1, FieldKind::SharedMutable(2))]),
         ty(2, None, vec![]),
     ];
-    admit_copy(&types, request(1, 1, CopyMode::Shallow, false)).unwrap();
+    err(
+        &types,
+        request(1, 1, CopyMode::Shallow, false),
+        "E_COPY_SHALLOW_ALIAS",
+    );
     err(
         &types,
         request(1, 1, CopyMode::Shallow, true),
@@ -183,4 +187,44 @@ fn immutable_frozen_field_permits_actor_send_with_independent_root() {
     let types = [ty(1, None, vec![field(1, FieldKind::ImmutableShared)])];
     admit_copy(&types, request(1, 1, CopyMode::Shallow, true)).unwrap();
     admit_copy(&types, request(1, 1, CopyMode::Deep, true)).unwrap();
+}
+
+#[test]
+fn inherited_mutable_sharing_cannot_bypass_shallow_admission() {
+    let types = [
+        ty(1, None, vec![field(1, FieldKind::SharedMutable(3))]),
+        ty(2, Some(1), vec![field(2, FieldKind::Scalar)]),
+        ty(3, None, vec![field(3, FieldKind::Scalar)]),
+    ];
+    err(&types, request(2, 1, CopyMode::Shallow, false), "E_COPY_SHALLOW_ALIAS");
+    let plan = admit_copy(&types, request(2, 1, CopyMode::Deep, false)).unwrap();
+    assert_eq!(plan.copied_type_ids, vec![1, 2, 3]);
+}
+
+#[test]
+fn shallow_self_cycle_needs_readonly_transition_not_a_type_witness() {
+    let types = [ty(1, None, vec![field(1, FieldKind::SharedMutable(1))])];
+    err(&types, request(1, 1, CopyMode::Shallow, false), "E_COPY_SHALLOW_ALIAS");
+    assert_eq!(
+        admit_copy(&types, request(1, 1, CopyMode::Deep, false)).unwrap().copied_type_ids,
+        vec![1],
+    );
+}
+
+#[test]
+fn unknown_shared_child_is_not_a_valid_shallow_descriptor() {
+    for nested in [0, 99] {
+        let types = [ty(1, None, vec![field(1, FieldKind::SharedMutable(nested))])];
+        err(&types, request(1, 1, CopyMode::Shallow, false), "E_COPY_AOT_WITNESS");
+    }
+}
+
+#[test]
+fn flat_scalar_and_immutable_backing_remain_shallow_copyable() {
+    let types = [
+        ty(1, None, vec![field(1, FieldKind::Scalar)]),
+        ty(2, Some(1), vec![field(2, FieldKind::ImmutableShared)]),
+    ];
+    let plan = admit_copy(&types, request(2, 1, CopyMode::Shallow, false)).unwrap();
+    assert_eq!(plan.copied_type_ids, vec![1, 2]);
 }
