@@ -100,3 +100,62 @@ fn write_before_last_borrow_use_is_detected() {
     source = source.replace("P|3|E|1|0|0|0|2|-|-|0|0", "P|3|E|1|0|0|0|1|-|-|0|0");
     invalid(analyze_manifest(&source));
 }
+
+fn via_store() -> String {
+    format!(
+        "{CONTRACT}\n\
+F|main|1|4\n\
+P|1|I|1|0|1|0|2|-|-|0|0\n\
+P|2|S|0|0|0|1|3|-|-|0|0\n\
+P|3|E|1|0|1|0|4|-|-|0|0\n\
+P|4|R|0|0|0|0|-|-|-|0|0\n\
+END\n"
+    )
+}
+
+#[test]
+fn mutable_store_without_rhs_loan_read_is_a_live_use() {
+    let report = analyze_manifest(&via_store()).unwrap();
+    assert!(report.functions[0].ssa.loan_report.live_loans_on_entry[&2].contains(&1));
+}
+
+#[test]
+fn mutable_store_after_end_is_rejected_even_without_rhs_loan_read() {
+    let source = via_store()
+        .replace("P|1|I|1|0|1|0|2|", "P|1|I|1|0|1|0|3|")
+        .replace("P|3|E|1|0|1|0|4|", "P|3|E|1|0|1|0|2|")
+        .replace("P|2|S|0|0|0|1|3|", "P|2|S|0|0|0|1|4|");
+    invalid(analyze_manifest(&source));
+}
+
+#[test]
+fn mutable_store_before_issuer_is_rejected() {
+    let source = via_store()
+        .replace("F|main|1|4", "F|main|2|4")
+        .replace("P|2|S|0|0|0|1|3|", "P|2|S|0|0|0|1|1|")
+        .replace("P|1|I|1|0|1|0|2|", "P|1|I|1|0|1|0|3|");
+    invalid(analyze_manifest(&source));
+}
+
+fn overlapping_issuance(first: u32, second: u32, second_owner: u32) -> String {
+    format!(
+        "{CONTRACT}\n\
+F|main|1|6\n\
+P|1|I|1|0|{first}|0|2|-|-|0|0\n\
+P|2|I|2|{second_owner}|{second}|0|3|-|-|0|0\n\
+P|3|V|0|0|0|0|4|1:0,2:{second_owner}|-|0|0\n\
+P|4|E|2|{second_owner}|{second}|0|5|-|-|0|0\n\
+P|5|E|1|0|{first}|0|6|-|-|0|0\n\
+P|6|R|0|0|0|0|-|-|-|0|0\n\
+END\n"
+    )
+}
+
+#[test]
+fn live_overlapping_issuances_require_both_loans_shared() {
+    for (first, second) in [(0, 1), (1, 0), (1, 1)] {
+        invalid(analyze_manifest(&overlapping_issuance(first, second, 0)));
+    }
+    assert!(analyze_manifest(&overlapping_issuance(0, 0, 0)).is_ok());
+    assert!(analyze_manifest(&overlapping_issuance(1, 1, 1)).is_ok());
+}

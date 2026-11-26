@@ -29,3 +29,9 @@ two *individually SHA-exact* Git subtrees (compiler + canonical checker),
 running the actual compiler exporter and this consumer on real positive and
 negative AttoLang guest fixtures. Do not use external cross-org checkout
 tokens or describe partial-tree tests as complete-tree results.
+
+Mutable stores through a loan count as SSA uses even when the RHS has no
+loan loads. Issuing a loan invalidates overlapping live loans if either is
+exclusive; distinct owner roots and shared/shared loans remain admissible.
+Direct-read invalidation visits each known loan once per instruction. These
+checks remain diagnostic-only and assume truthful canonical alias roots.

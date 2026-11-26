@@ -245,9 +245,10 @@ fn one_function(name: String, entry: u32, rows: Vec<Row>) -> Result<FunctionRepo
                 {
                     return Err(invalid("E_WIRE_WRITE_THROUGH"));
                 }
-                invalidate.extend(owners.iter().filter_map(|(&loan, &(owner, _))| {
-                    (owner == r.owner && loan != r.via).then_some(loan)
-                }));
+                if r.via != 0 {
+                    // A store through a loan is a use even without an RHS load.
+                    borrowed_use_points.push((r.id, r.via));
+                }
             }
             Kind::Eval | Kind::Condition | Kind::Return => {}
         }
@@ -260,14 +261,27 @@ fn one_function(name: String, entry: u32, rows: Vec<Row>) -> Result<FunctionRepo
             }
             borrowed_use_points.push((r.id, loan));
         }
-        for &owner in &r.direct {
-            invalidate.extend(owners.iter().filter_map(|(&loan, &(issued_owner, ex))| {
-                (ex && issued_owner == owner).then_some(loan)
-            }));
-        }
-        invalidate.sort_unstable();
-        invalidate.dedup();
+        // Visit each known loan once per point, not once per direct read.
+        // Loan issuance conflicts with an already-live overlapping loan when
+        // either is exclusive. A shared/shared issuance remains admissible.
+        let direct: BTreeSet<_> = r.direct.iter().copied().collect();
+        invalidate.extend(owners.iter().filter_map(|(&loan, &(owner, exclusive))| {
+            let issuance_conflict = r.kind == Kind::Issue
+                && loan != r.loan
+                && owner == r.owner
+                && (exclusive || r.flag == 1);
+            let write_conflict = r.kind == Kind::Set && owner == r.owner && loan != r.via;
+            let read_conflict = exclusive && direct.contains(&owner);
+            (issuance_conflict || write_conflict || read_conflict).then_some(loan)
+        }));
         let mut seen = BTreeSet::new();
+        if r.kind == Kind::Set && r.via != 0 {
+            seen.insert(r.via);
+            uses.push(OriginUse {
+                point: r.id,
+                origin: r.via,
+            });
+        }
         for &(loan, _) in &r.reads {
             if seen.insert(loan) {
                 uses.push(OriginUse {
@@ -280,6 +294,7 @@ fn one_function(name: String, entry: u32, rows: Vec<Row>) -> Result<FunctionRepo
             r.succ.len()
                 + r.reads.len()
                 + r.direct.len()
+                + usize::from(r.kind == Kind::Set && r.via != 0)
                 + issue.len()
                 + kill.len()
                 + invalidate.len(),
