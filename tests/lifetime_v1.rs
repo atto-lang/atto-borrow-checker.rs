@@ -266,3 +266,82 @@ fn unrelated_scope_can_exit_with_outer_exclusive_loan() {
     c.end_borrow(1).unwrap();
     c.drop_owner(1).unwrap();
 }
+
+use atto_borrow_checker::lifetime_v1::{
+    resolve_return_contract, BorrowedFormal, ReturnContractError,
+};
+
+fn formal(lifetime: Option<u16>, mutable: bool) -> BorrowedFormal {
+    BorrowedFormal { lifetime, mutable }
+}
+
+#[test]
+fn single_input_elision_and_named_selection_are_distinct() {
+    let one = resolve_return_contract(0, &[formal(None, false)], formal(None, false)).unwrap();
+    assert_eq!(one.allowed_origins(), &[0]);
+    assert_eq!(one.check_origins(&[Some(0), Some(0)]), Ok(()));
+    assert_eq!(
+        one.check_origins(&[None]),
+        Err(ReturnContractError::InvalidOrigin)
+    );
+    let inputs = [formal(Some(0), false), formal(Some(1), false)];
+    assert_eq!(
+        resolve_return_contract(2, &inputs, formal(None, false)),
+        Err(ReturnContractError::Ambiguous)
+    );
+    let left = resolve_return_contract(2, &inputs, formal(Some(0), false)).unwrap();
+    assert_eq!(left.allowed_origins(), &[0]);
+    assert_eq!(
+        left.check_origins(&[Some(0), Some(1)]),
+        Err(ReturnContractError::InvalidOrigin)
+    );
+}
+
+#[test]
+fn same_named_region_admits_multiple_origins_without_granting_mutability() {
+    let inputs = [formal(Some(0), false), formal(Some(0), true)];
+    let contract = resolve_return_contract(1, &inputs, formal(Some(0), false)).unwrap();
+    assert_eq!(contract.allowed_origins(), &[0, 1]);
+    assert_eq!(contract.check_origins(&[Some(1), Some(0)]), Ok(()));
+    assert_eq!(
+        resolve_return_contract(1, &inputs, formal(Some(0), true)),
+        Err(ReturnContractError::Mutability)
+    );
+    assert!(resolve_return_contract(0, &[formal(None, true)], formal(None, true)).is_ok());
+}
+
+#[test]
+fn malformed_or_unbacked_signature_and_return_census_fail_closed() {
+    use ReturnContractError::*;
+    assert_eq!(
+        resolve_return_contract(0, &[], formal(None, false)),
+        Err(NoInput)
+    );
+    assert_eq!(
+        resolve_return_contract(1, &[formal(None, false)], formal(Some(0), false)),
+        Err(NoInput)
+    );
+    assert_eq!(
+        resolve_return_contract(1, &[formal(Some(1), false)], formal(Some(0), false)),
+        Err(UnknownLifetime)
+    );
+    assert_eq!(
+        resolve_return_contract(0, &[formal(None, false)], formal(Some(0), false)),
+        Err(UnknownLifetime)
+    );
+    let contract = resolve_return_contract(0, &[formal(None, false)], formal(None, false)).unwrap();
+    assert_eq!(contract.check_origins(&[]), Err(NoReturnEvidence));
+    assert_eq!(
+        contract.check_origins(&[Some(usize::MAX)]),
+        Err(InvalidOrigin)
+    );
+    assert_eq!(contract.check_origins(&vec![Some(0); 1025]), Err(Budget));
+    assert_eq!(
+        resolve_return_contract(0, &vec![formal(None, false); 1025], formal(None, false)),
+        Err(Budget)
+    );
+    assert_eq!(
+        resolve_return_contract(1025, &[formal(None, false)], formal(None, false)),
+        Err(Budget)
+    );
+}
