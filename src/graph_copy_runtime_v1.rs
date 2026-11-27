@@ -20,6 +20,8 @@ use crate::copy_graph_v1::{
 pub type NodeId = usize;
 pub const MAX_CLONE_NODES: usize = 1024;
 pub const MAX_CLONE_DEPTH: usize = 128;
+/// Bound aggregate flattened runtime field visits, not just descriptor fields.
+pub const MAX_CLONE_FIELDS: usize = 65536;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Slot {
@@ -61,6 +63,7 @@ pub struct GraphCopyContext<'a> {
     memo: BTreeMap<NodeId, NodeId>,
     max_nodes: usize,
     appended: usize,
+    fields_visited: usize,
 }
 
 impl<'a> GraphCopyContext<'a> {
@@ -92,6 +95,7 @@ impl<'a> GraphCopyContext<'a> {
             memo: BTreeMap::new(),
             max_nodes,
             appended: 0,
+            fields_visited: 0,
         })
     }
 
@@ -132,6 +136,7 @@ impl<'a> GraphCopyContext<'a> {
                 self.destination.nodes.truncate(checkpoint);
                 self.memo.clear();
                 self.appended = 0;
+                self.fields_visited = 0;
                 Err(err)
             }
         }
@@ -167,11 +172,23 @@ impl<'a> GraphCopyContext<'a> {
                 .ok_or(Error("E_COPY_AOT_WITNESS"))?
                 .parent;
         }
+        // Charge the complete flattened inventory before allocating/cloning
+        // its slots. Repeated aliases hit the memo before reaching this path.
+        let field_count = ancestors.iter().try_fold(0usize, |total, id| {
+            total.checked_add(self.types[id].fields.len())
+                .ok_or(Error("E_COPY_GRAPH_BUDGET"))
+        })?;
+        if src.fields.len() != field_count {
+            return Err(Error("E_COPY_LAYOUT"));
+        }
+        let next = self.fields_visited.checked_add(field_count)
+            .ok_or(Error("E_COPY_GRAPH_BUDGET"))?;
+        if next > MAX_CLONE_FIELDS {
+            return Err(Error("E_COPY_GRAPH_BUDGET"));
+        }
+        self.fields_visited = next;
         for id in ancestors.into_iter().rev() {
             layouts.extend(self.types[&id].fields.iter().cloned());
-        }
-        if src.fields.len() != layouts.len() {
-            return Err(Error("E_COPY_LAYOUT"));
         }
         let fields = src.fields.clone();
         // Constructor-free clone shell, tracked before visiting descendants.
