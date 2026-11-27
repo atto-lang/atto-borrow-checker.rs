@@ -9,9 +9,11 @@ use std::io::Read;
 use std::process::ExitCode;
 
 use atto_borrow_checker::conformance_v1::{
-    self, compare_graph_results, cross_check, decode_backend_record, decode_graph_corpus,
+    self, compare_graph_results, cross_check_with, decode_backend_record, decode_graph_corpus,
     decode_graph_result, run_graph_corpus, CrossPolicy, GraphCorpus, REGISTRY,
 };
+use atto_borrow_checker::conformance_v1::{EngineMode, Verdict};
+use atto_borrow_checker::hybrid_v1::Engine;
 use atto_borrow_checker::wire_v1::{self, parse_json, write_json, Json, MAX_DOCUMENT_BYTES};
 
 const USAGE: &str = "usage:
@@ -22,7 +24,7 @@ const USAGE: &str = "usage:
       UNSUPPORTED cases are tolerated coverage gaps unless --require-full.
   atto-borrow-conform verify-mir <mir.json|->
       Canonically verify one atto-borrow-mir-v1 function.
-  atto-borrow-conform cross-check <report.jsonl|-> [--allow-stricter] [--require-mir]
+  atto-borrow-conform cross-check <report.jsonl|-> [--allow-stricter] [--require-mir] [--engine v0|hybrid]
       L3: re-verify each backend-exported function and classify disagreement.
   atto-borrow-conform registry
       Print the canonical code registry as TSV (code, class, families).";
@@ -115,6 +117,14 @@ fn cmd_graph_cases(path: &str) -> Result<bool, String> {
             obj(vec![
                 ("level", s("L1-canonical")),
                 ("schema", s(&corpus.schema)),
+                (
+                    "engine",
+                    s(if corpus.engine == EngineMode::Hybrid {
+                        "hybrid"
+                    } else {
+                        "v0"
+                    }),
+                ),
                 ("cases", Json::Int(outcomes.len() as u64)),
                 ("failures", Json::Int(failures)),
             ]),
@@ -183,7 +193,16 @@ fn cmd_verify_mir(path: &str) -> Result<bool, String> {
     return Ok(verdict.is_accept());
 }
 
-fn cmd_cross_check(path: &str, policy: CrossPolicy) -> Result<bool, String> {
+fn canonical_json(verdict: &Verdict, engine: Engine) -> Json {
+    let mut json = verdict.to_json();
+    if let Json::Obj(fields) = &mut json {
+        fields.push(("engine".to_string(), s(engine.name())));
+    }
+    return json;
+}
+
+fn cmd_cross_check(path: &str, policy: CrossPolicy, mode: EngineMode) -> Result<bool, String> {
+    let mut cyclic_decided = 0u64;
     let mut counts: BTreeMap<&'static str, u64> = BTreeMap::new();
     let mut per_backend: BTreeMap<String, BTreeMap<&'static str, u64>> = BTreeMap::new();
     let mut failures = 0u64;
@@ -191,7 +210,10 @@ fn cmd_cross_check(path: &str, policy: CrossPolicy) -> Result<bool, String> {
     for (line, value) in parse_lines(path)? {
         let record = decode_backend_record(&value).map_err(|e| format!("{path}:{line}: {e}"))?;
         records += 1;
-        let (canonical, class) = cross_check(&record);
+        let (canonical, class) = cross_check_with(&record, mode);
+        if matches!(canonical, Some((_, Engine::CyclicV1))) {
+            cyclic_decided += 1;
+        }
         let fails = class.fails(policy);
         if fails {
             failures += 1;
@@ -227,7 +249,9 @@ fn cmd_cross_check(path: &str, policy: CrossPolicy) -> Result<bool, String> {
                 ),
                 (
                     "canonical",
-                    canonical.as_ref().map_or(Json::Null, |v| v.to_json()),
+                    canonical
+                        .as_ref()
+                        .map_or(Json::Null, |(v, e)| canonical_json(v, *e)),
                 ),
                 (
                     "mirUnavailable",
@@ -251,6 +275,15 @@ fn cmd_cross_check(path: &str, policy: CrossPolicy) -> Result<bool, String> {
                 ("failures", Json::Int(failures)),
                 ("allowStricter", Json::Bool(policy.allow_stricter)),
                 ("requireMir", Json::Bool(policy.require_mir)),
+                (
+                    "engine",
+                    s(if mode == EngineMode::Hybrid {
+                        "hybrid"
+                    } else {
+                        "v0"
+                    }),
+                ),
+                ("decidedByCyclicV1", Json::Int(cyclic_decided)),
                 ("counts", counts_json(&counts)),
                 (
                     "byBackend",
@@ -291,14 +324,22 @@ fn run(args: &[String]) -> Result<bool, String> {
         ["verify-mir", mir] => cmd_verify_mir(mir),
         ["cross-check", report, flags @ ..] => {
             let mut policy = CrossPolicy::default();
-            for flag in flags {
+            let mut mode = EngineMode::Hybrid;
+            let mut flags = flags.iter();
+            while let Some(flag) = flags.next() {
                 match *flag {
                     "--allow-stricter" => policy.allow_stricter = true,
                     "--require-mir" => policy.require_mir = true,
+                    "--engine" => {
+                        mode = flags
+                            .next()
+                            .and_then(|m| EngineMode::parse(m))
+                            .ok_or_else(|| format!("--engine needs v0 or hybrid\n{USAGE}"))?;
+                    }
                     other => return Err(format!("unknown flag {other}\n{USAGE}")),
                 }
             }
-            cmd_cross_check(report, policy)
+            cmd_cross_check(report, policy, mode)
         }
         ["registry"] => cmd_registry(),
         _ => Err(USAGE.to_string()),

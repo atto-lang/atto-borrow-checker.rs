@@ -108,7 +108,11 @@ Check one function with `atto-borrow-conform verify-mir fn.json`.
   the claimed commit to the compiler that produced the report.
 - Optional key: `note`.
 
-Run `atto-borrow-conform cross-check report.jsonl [--allow-stricter] [--require-mir]`.
+Run `atto-borrow-conform cross-check report.jsonl [--allow-stricter] [--require-mir] [--engine v0|hybrid]`.
+The default engine is `hybrid`: V0, then `cyclic_v1` for graphs V0 rejects only at its
+join/cycle model limits (see the conformance plan). Each `canonical` verdict carries
+`engine` (`v0` or `cyclic_v1`), and the summary counts `decidedByCyclicV1`. A corpus
+header may declare `"engine": "hybrid"` (default `v0`).
 The output is JSON Lines, one classified line per record, ending with a
 `summary` line. Exit status is 0 when conformant, 1 when not, and 2 on an
 input error. Empty reports are input errors. An unsupported MIR effect

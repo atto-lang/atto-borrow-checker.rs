@@ -1039,3 +1039,6 @@ pub mod wire_v1;
 /// Backend conformance: graph corpus (L1) and backend report
 /// cross-verification (L3). See `docs/CONFORMANCE_PLAN.md`.
 pub mod conformance_v1;
+
+/// Hybrid conformance verdict: V0, then cyclic_v1 past V0 join/cycle limits.
+pub mod hybrid_v1;

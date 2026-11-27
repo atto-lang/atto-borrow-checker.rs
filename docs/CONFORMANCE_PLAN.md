@@ -92,7 +92,7 @@ atto-borrow-conform cross-check java-report.jsonl
 | `CODE_MISMATCH` | both reject, but for unrelated reasons | yes |
 | `ADAPTER_DEFECT` | exported graph is malformed (identity reuse, bad inventory) | yes |
 | `BACKEND_STRICTER` | backend rejected what canonical accepts | yes, unless `--allow-stricter` |
-| `OUT_OF_SCOPE` | canonical model limit or budget (loops, divergent joins, FFI) | no; not evidence |
+| `OUT_OF_SCOPE` | canonical model limit or budget that the hybrid cannot decide (ops outside its subset, FFI, budgets) | no; not evidence |
 | `NON_OWNERSHIP_REJECT` | backend rejected for syntax/type reasons | no; not evidence |
 | `NOT_EXPORTED` | no MIR exported | no, unless `--require-mir` |
 
@@ -165,11 +165,11 @@ old Node tests then become redundant.
    compiler output.
 3. **M2 – L1 adapters**: LLVM and Forge graph adapters; replace the vendored
    copies with pinned references in all six repos.
-4. **M3 – canonical coverage**: V0 rejects loops and divergent joins, so most
-   real functions will be `OUT_OF_SCOPE`. Extend the canonical model to MAY/MUST
-   joins and fixed-point loops, using `cyclic_v1` as the starting point. This
-   gives L3 coverage over ordinary control flow. It is the main blocker for
-   meaningful cross-verification of LLVM, whose engine already handles joins.
+4. **M3 – canonical coverage (canonical side done; see "Hybrid canonical verdict" below)**:
+   V0 rejects loops and divergent joins. The hybrid verdict re-decides exactly
+   those graphs with `cyclic_v1`. Remaining: backend exporters must emit real
+   CFG blocks for branches and loops (atto-source.rs first).
+
 5. **M4 – strict mode**: compilers gain `--borrow-strict`, which runs the
    canonical checker in process (Rust/Cranelift link it; others use a
    persistent worker) and blocks codegen on any failing class. CI matrix: every
@@ -251,3 +251,62 @@ what this compiler actually decided, not the spec.
 Also note that `cargo test` on atto-source.rs main does not compile: several
 `tests/*.rs` still `use oreslang_source_rs`. Per-target runs are needed
 until that is fixed.
+
+## Hybrid canonical verdict (M3, `src/hybrid_v1.rs`)
+
+V0 rejects every divergent join (`E_CFG_JOIN_UNPROVEN`) and every cycle
+(`E_CFG_CYCLE_UNPROVEN`). These are model limits, not AttoLang rules, and
+under strict V0 they would leave every branched or looping function
+`OUT_OF_SCOPE`. `cross-check` therefore uses a **hybrid** verdict by default:
+
+1. V0 decides first. Its verdict stands unless it is one of those two CFG
+   limits. The MIR envelope (inventory, effects, provenance) is always V0's.
+2. Otherwise the graph is lowered onto `cyclic_v1`, the independent MAY/MUST
+   fixed-point model. Its result maps back to the exact canonical code at the
+   original block and op.
+3. If any op has no exact `cyclic_v1` counterpart, the V0 limit stands and the
+   record stays `OUT_OF_SCOPE`. The hybrid never guesses.
+
+| V0 op | `cyclic_v1` lowering |
+|---|---|
+| every introduced owner | `Move(root)` in a synthetic entry block (uninitialized) |
+| `Init` | `Reinitialize` (requires definitely-moved on all incoming paths) |
+| `Move{from,into}` / `Copy{from,into}` | `Move`/`Copy(from)`, then `Reinitialize(into)` |
+| `Read`, `Write`, `Drop`, `Suspend` | same |
+| `Borrow`, `WriteThrough`, `EndBorrow` | `Borrow`, `WriteThrough`, `EndLoan` |
+| `TaskCaptureMove`, `ActorSendMove` | `Transfer` (requires Send) |
+| `Return` | `Nop` (exit = no successors; exit shape checked first) |
+| anything else | not lowered: V0 limit stands |
+
+The `cyclic_v1` failures map to canonical codes as follows:
+
+| `cyclic_v1` failure | Canonical code |
+|---|---|
+| UseAfterMove | `E_USE_AFTER_MOVE_OR_DROP` |
+| LoanConflict | `E_BORROW_CONFLICT`, or `E_MUT_LOAN_REQUIRED` on `WriteThrough` |
+| LoanEscape | `E_LOAN_ESCAPE` |
+| UnsupportedSuspension | `E_SUSPEND_WITH_LIVE_LOAN` |
+| NotCopy | `E_COPY_PROOF_REQUIRED` |
+| NotTransferable | `E_TASK_CAPTURE_PROOF` / `E_ACTOR_SEND_PROOF_REQUIRED` |
+| LoanNotLive | `E_UNKNOWN_LOAN` (adapter) |
+| ReinitializeNotProven | `E_OWNER_DEF_REUSED` (adapter) |
+
+**Exporter obligations for branches and loops:**
+
+- An owner introduced inside a loop body must be released (`Drop`/`Move`)
+  before the back-edge; otherwise the graph is reported as `E_OWNER_DEF_REUSED`.
+- A loan must be live on every path that ends it.
+
+**Boundary.** A hybrid accept has **no V0 cleanup plan**. It is a
+conformance verdict on the submitted graph, never authorization to emit code
+for a program V0 rejects. Every canonical verdict in `cross-check` output
+names its `engine` (`v0` or `cyclic_v1`), and the summary counts
+`decidedByCyclicV1`. Use `--engine v0` for strict-V0 classification.
+
+The corpus is `conformance/graph-cases-hybrid-v1.json` (header `"engine":
+"hybrid"`, 18 cases). `tests/hybrid_v1.rs` checks three properties:
+
+- every case conforms;
+- V0 cannot decide the case, or already agrees on it;
+- over the whole 59-case L1 corpus, the hybrid never changes a verdict that
+  V0 decided.
