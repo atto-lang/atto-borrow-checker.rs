@@ -38,7 +38,7 @@ jobs:
           test -z "$(git status --porcelain)"
           mkdir -p target/borrow-rust-exact-head-evidence
           printf "head=%s\ntree=%s\nstatus=HOST_NATIVE_ONLY\n" "$EXPECTED_HEAD" "$(git rev-parse HEAD^{tree})" > target/borrow-rust-exact-head-evidence/identity.txt
-          test "$(git rev-parse HEAD:tests/nine_toolchain_contract_v1.rs)" = "73b9e8e1a6d32857e995c27467a046e9ce786917"
+          test "$(git rev-parse HEAD:tests/nine_toolchain_contract_v1.rs)" = "2b880e292b825f762fb81ee7ab5d95ebacaadf65"
           test "$(git rev-parse HEAD:tests/nine_toolchain_contract_v1.rs)" = "$(git hash-object --no-filters tests/nine_toolchain_contract_v1.rs)"
           printf "test_blob=%s\n" "$(git rev-parse HEAD:tests/nine_toolchain_contract_v1.rs)" >> target/borrow-rust-exact-head-evidence/identity.txt
       - name: Install pinned Rust toolchain
