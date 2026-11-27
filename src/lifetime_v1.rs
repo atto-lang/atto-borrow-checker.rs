@@ -254,3 +254,99 @@ impl Lifetimes {
         Ok(())
     }
 }
+
+// Signature-only reference model. Inputs are resolved borrowed formal positions
+// (including self if applicable). Named lifetime IDs are dense, compiler-owned
+// indices; None represents a fresh elided input region, not a shared region.
+const MAX_SIGNATURE_INPUTS: usize = 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BorrowedFormal {
+    pub lifetime: Option<u16>,
+    pub mutable: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReturnContractError {
+    Budget,
+    UnknownLifetime,
+    Ambiguous,
+    NoInput,
+    InvalidOrigin,
+    Mutability,
+    NoReturnEvidence,
+}
+
+/// A conservative summary of allowed input origins, not a proof of a function
+/// body or authorization to emit code. Caller instantiation, CFG, effects,
+/// projections, storage, actor domain and live-loan checks remain mandatory.
+#[derive(Debug, PartialEq, Eq)]
+pub struct ReturnContract {
+    allowed: Vec<usize>,
+}
+
+impl ReturnContract {
+    pub fn allowed_origins(&self) -> &[usize] {
+        &self.allowed
+    }
+
+    /// Check the compiler-provided complete census of reachable return origins.
+    /// None represents a local, unknown, or otherwise unsupported origin.
+    pub fn check_origins(&self, origins: &[Option<usize>]) -> Result<(), ReturnContractError> {
+        if origins.len() > MAX_SIGNATURE_INPUTS {
+            return Err(ReturnContractError::Budget);
+        }
+        if origins.is_empty() {
+            return Err(ReturnContractError::NoReturnEvidence);
+        }
+        for origin in origins {
+            let index = origin.ok_or(ReturnContractError::InvalidOrigin)?;
+            if self.allowed.binary_search(&index).is_err() {
+                return Err(ReturnContractError::InvalidOrigin);
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Resolve only borrowed-result signatures in the conservative v1 profile.
+/// With no explicit output region, only a single borrowed formal is eligible.
+/// Named return regions must occur on at least one input. Static storage,
+/// outlives coercion and inferred equivalent multi-input summaries are deferred.
+/// A mutable result requires every admitted origin to be exclusively borrowed.
+pub fn resolve_return_contract(
+    declared: u16,
+    inputs: &[BorrowedFormal],
+    output: BorrowedFormal,
+) -> Result<ReturnContract, ReturnContractError> {
+    use ReturnContractError::*;
+    if usize::from(declared) > MAX_SIGNATURE_INPUTS || inputs.len() > MAX_SIGNATURE_INPUTS {
+        return Err(Budget);
+    }
+    if inputs
+        .iter()
+        .chain(std::iter::once(&output))
+        .any(|formal| formal.lifetime.is_some_and(|id| id >= declared))
+    {
+        return Err(UnknownLifetime);
+    }
+    let allowed = match output.lifetime {
+        Some(id) => inputs
+            .iter()
+            .enumerate()
+            .filter_map(|(index, formal)| (formal.lifetime == Some(id)).then_some(index))
+            .collect::<Vec<_>>(),
+        None => match inputs.len() {
+            0 => return Err(NoInput),
+            1 => vec![0],
+            _ => return Err(Ambiguous),
+        },
+    };
+    if allowed.is_empty() {
+        return Err(NoInput);
+    }
+    if output.mutable && allowed.iter().any(|&index| !inputs[index].mutable) {
+        return Err(Mutability);
+    }
+    Ok(ReturnContract { allowed })
+}
