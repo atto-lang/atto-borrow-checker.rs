@@ -603,7 +603,7 @@ mod inference_preflight_tests {
         };
         assert_eq!(
             analyze_with_inferred_liveness(&template, &[]),
-            Err(error(Code::UnreachablePoint, 2))
+            Err(error(Code::UnreachablePoint, 1))
         );
     }
 
