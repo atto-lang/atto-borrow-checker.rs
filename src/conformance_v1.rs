@@ -15,6 +15,7 @@
 //! guest execution or certification: a model-level AGREE says the backend's
 //! exported graph and verdict are consistent, not that its codegen is safe.
 
+use crate::hybrid_v1::{self, Engine};
 use crate::mir_v1::{self, MirError};
 use crate::wire_v1::{self, Fields, Json, WireError, WireGraph, WireMir, UNSUPPORTED_EFFECT};
 use crate::{verify, Diagnostic, Proof};
@@ -327,6 +328,66 @@ pub fn verdict_for_mir(mir: &WireMir) -> Verdict {
     };
 }
 
+/// Apply the hybrid step to a V0 verdict: only V0's join/cycle model limits
+/// are re-decided, and only when the whole graph lowers onto cyclic_v1.
+fn hybrid_step(v0: Verdict, program: impl FnOnce() -> Option<crate::Program>) -> (Verdict, Engine) {
+    let limited = v0.code().is_some_and(hybrid_v1::is_cfg_model_limit);
+    if !limited {
+        return (v0, Engine::V0);
+    }
+    let Some(program) = program() else {
+        return (v0, Engine::V0);
+    };
+    return match hybrid_v1::check(&program) {
+        None => (v0, Engine::V0),
+        Some(Ok(())) => (
+            Verdict::Accept(Proof {
+                cleanup_by_exit: Default::default(),
+            }),
+            Engine::CyclicV1,
+        ),
+        Some(Err(diagnostic)) => (Verdict::from_diagnostic(diagnostic), Engine::CyclicV1),
+    };
+}
+
+/// Canonical verdict for a source-free graph under `mode`.
+pub fn verdict_for_graph_with(graph: &WireGraph, mode: EngineMode) -> (Verdict, Engine) {
+    let v0 = verdict_for_graph(graph);
+    if mode == EngineMode::V0 {
+        return (v0, Engine::V0);
+    }
+    return hybrid_step(v0, || graph.to_program().ok());
+}
+
+/// Canonical verdict for a backend-exported MIR function under `mode`.
+/// The MIR envelope (inventory, effects, provenance shape) is always checked
+/// by V0's `verify_mir` first; the hybrid step only follows a V0 CFG limit.
+pub fn verdict_for_mir_with(mir: &WireMir, mode: EngineMode) -> (Verdict, Engine) {
+    let v0 = verdict_for_mir(mir);
+    if mode == EngineMode::V0 || !mir.unsupported.is_empty() {
+        return (v0, Engine::V0);
+    }
+    return hybrid_step(v0, || {
+        Some(crate::Program {
+            entry: mir.function.entry,
+            blocks: mir
+                .function
+                .blocks
+                .iter()
+                .map(|block| crate::Block {
+                    id: block.id,
+                    operations: block
+                        .instructions
+                        .iter()
+                        .map(|i| i.operation.clone())
+                        .collect(),
+                    successors: block.successors.clone(),
+                })
+                .collect(),
+        })
+    });
+}
+
 // ---------------------------------------------------------------------------
 // L1: graph corpus
 // ---------------------------------------------------------------------------
@@ -340,9 +401,30 @@ pub struct GraphCase {
     pub graph: WireGraph,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum EngineMode {
+    /// Strict V0 only: the L1 engine contract (exact V0 codes).
+    #[default]
+    V0,
+    /// V0, then cyclic_v1 past V0 join/cycle model limits (`hybrid_v1`).
+    Hybrid,
+}
+
+impl EngineMode {
+    pub fn parse(text: &str) -> Option<Self> {
+        return match text {
+            "v0" => Some(EngineMode::V0),
+            "hybrid" => Some(EngineMode::Hybrid),
+            _ => None,
+        };
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct GraphCorpus {
     pub schema: String,
+    /// Header `engine`: which canonical verdict the expectations describe.
+    pub engine: EngineMode,
     pub cases: Vec<GraphCase>,
 }
 
@@ -355,6 +437,13 @@ pub fn decode_graph_corpus(value: &Json) -> Result<GraphCorpus, WireError> {
             at: "schema".into(),
         });
     }
+    let engine = match f.opt_str("engine")? {
+        None => EngineMode::V0,
+        Some(text) => EngineMode::parse(text).ok_or_else(|| WireError {
+            message: "engine must be v0 or hybrid".into(),
+            at: "engine".into(),
+        })?,
+    };
     let mut cases: Vec<GraphCase> = Vec::new();
     for (index, case) in f.arr("cases")?.iter().enumerate() {
         let at = format!("cases[{index}]");
@@ -407,8 +496,13 @@ pub fn decode_graph_corpus(value: &Json) -> Result<GraphCorpus, WireError> {
         "evidence",
         "evidencePolicy",
         "note",
+        "engine",
     ])?;
-    return Ok(GraphCorpus { schema, cases });
+    return Ok(GraphCorpus {
+        schema,
+        engine,
+        cases,
+    });
 }
 
 #[derive(Clone, Debug)]
@@ -425,7 +519,7 @@ pub fn run_graph_corpus(corpus: &GraphCorpus) -> Vec<GraphCaseOutcome> {
         .cases
         .iter()
         .map(|case| {
-            let actual = verdict_for_graph(&case.graph);
+            let actual = verdict_for_graph_with(&case.graph, corpus.engine).0;
             let conforms = match (&actual, case.expect_accept) {
                 (Verdict::Accept(_), true) => true,
                 (Verdict::Reject { code, .. }, false) => case.diagnostic.as_deref() == Some(code),
@@ -763,8 +857,25 @@ pub fn classify(local: &LocalVerdict, canonical: Option<&Verdict>) -> CrossClass
     };
 }
 
+/// Cross-check one record with the hybrid canonical verdict (the default).
 pub fn cross_check(record: &BackendRecord) -> (Option<Verdict>, CrossClass) {
-    let canonical = record.mir.as_ref().ok().map(verdict_for_mir);
-    let class = classify(&record.local, canonical.as_ref());
+    let (canonical, class) = cross_check_with(record, EngineMode::Hybrid);
+    return (canonical.map(|(verdict, _)| verdict), class);
+}
+
+/// Cross-check one record, reporting which engine decided the verdict.
+pub fn cross_check_with(
+    record: &BackendRecord,
+    mode: EngineMode,
+) -> (Option<(Verdict, Engine)>, CrossClass) {
+    let canonical = record
+        .mir
+        .as_ref()
+        .ok()
+        .map(|mir| verdict_for_mir_with(mir, mode));
+    let class = classify(
+        &record.local,
+        canonical.as_ref().map(|(verdict, _)| verdict),
+    );
     return (canonical, class);
 }
