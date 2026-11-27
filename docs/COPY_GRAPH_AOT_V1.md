@@ -47,9 +47,12 @@ borrow checker V0 operations and this separate admission API have not yet been
 composed into a sound source-to-MIR proof. A backend must refuse object
 copying until that integration is finished.
 
-Type-graph traversal has bounded size/depth, but does not bound runtime
-object-graph depth, total allocation, time or hard-real-time latency. Such
-budgets require additional runtime-profile proofs.
+Type-graph traversal has bounded size/depth. The separate reference graph
+cloner additionally bounds nodes, recursion depth and aggregate flattened
+runtime field visits per invocation (including inherited slots); repeated
+identities count once. Failed model copies restore the destination checkpoint
+and all per-operation accounting before a retry. These are model limits, not
+production heap allocation, time or hard-real-time latency guarantees.
 
 ## Required backend integration
 
