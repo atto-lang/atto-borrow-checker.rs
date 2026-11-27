@@ -1,7 +1,7 @@
 //! Tests of the bounded *semantic model*; these do not execute AttoLang guests.
 use atto_borrow_checker::copy_graph_v1::{Error, Field, FieldKind, TypeDescriptor};
 use atto_borrow_checker::graph_copy_runtime_v1::{
-    Arena, GraphCopyContext, Node, Slot, MAX_CLONE_DEPTH,
+    Arena, GraphCopyContext, Node, Slot, MAX_CLONE_DEPTH, MAX_CLONE_FIELDS,
 };
 
 fn ty(id: u32, parent: Option<u32>, kinds: &[FieldKind]) -> TypeDescriptor {
@@ -251,4 +251,52 @@ fn deep_chain_hits_bound_and_rolls_back_without_stack_overflow() {
     );
     drop(ctx);
     assert!(destination.nodes.is_empty());
+}
+
+#[test]
+fn aggregate_flattened_field_budget_is_atomic_and_context_can_retry() {
+    // One descriptor reused by three nodes; the descriptor inventory fits,
+    // but a deep copy must also bound the aggregate runtime field count.
+    let width = MAX_CLONE_FIELDS / 2;
+    let mut kinds = vec![FieldKind::Scalar; width];
+    kinds[0] = FieldKind::OwnedMutable(1);
+    let types = [ty(1, None, &kinds)];
+    let mut original = Arena::default();
+    for next in [Some(1), Some(2), None] {
+        let mut fields = vec![scalar(42); width];
+        fields[0] = Slot::Mutable(next);
+        original.push(node(1, fields));
+    }
+    let existing = node(1, vec![]);
+    let mut destination = Arena { nodes: vec![existing.clone()] };
+    let mut ctx = GraphCopyContext::new(&types, &original, &mut destination, 4).unwrap();
+    assert_eq!(ctx.copy_root(0, 1, false), Err(Error("E_COPY_GRAPH_BUDGET")));
+    // Exactly at the field limit: retry must not retain the failed copy's
+    // field charges, memo entries, or shell allocations.
+    assert_eq!(ctx.copy_root(1, 1, false).unwrap(), 1);
+    drop(ctx);
+    assert_eq!(destination.nodes.len(), 3);
+    assert_eq!(destination.nodes[0], existing);
+    assert_eq!(destination.nodes[1].fields[0], child(2));
+    assert_eq!(destination.nodes[2].fields[0], Slot::Mutable(None));
+}
+
+#[test]
+fn repeated_aliases_do_not_charge_the_same_runtime_node_twice() {
+    let width = MAX_CLONE_FIELDS - 2;
+    let types = [
+        ty(1, None, &[FieldKind::OwnedMutable(2), FieldKind::OwnedMutable(2)]),
+        ty(2, None, &vec![FieldKind::Scalar; width]),
+    ];
+    let original = Arena {
+        nodes: vec![node(1, vec![child(1), child(1)]), node(2, vec![scalar(42); width])],
+    };
+    let mut destination = Arena::default();
+    GraphCopyContext::new(&types, &original, &mut destination, 4)
+        .unwrap()
+        .copy_root(0, 1, false)
+        .unwrap();
+    assert_eq!(destination.nodes.len(), 2);
+    assert_eq!(destination.nodes[0].fields, vec![child(1), child(1)]);
+    assert_eq!(destination.nodes[1].fields.len(), width);
 }
