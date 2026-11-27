@@ -175,13 +175,16 @@ impl<'a> GraphCopyContext<'a> {
         // Charge the complete flattened inventory before allocating/cloning
         // its slots. Repeated aliases hit the memo before reaching this path.
         let field_count = ancestors.iter().try_fold(0usize, |total, id| {
-            total.checked_add(self.types[id].fields.len())
+            total
+                .checked_add(self.types[id].fields.len())
                 .ok_or(Error("E_COPY_GRAPH_BUDGET"))
         })?;
         if src.fields.len() != field_count {
             return Err(Error("E_COPY_LAYOUT"));
         }
-        let next = self.fields_visited.checked_add(field_count)
+        let next = self
+            .fields_visited
+            .checked_add(field_count)
             .ok_or(Error("E_COPY_GRAPH_BUDGET"))?;
         if next > MAX_CLONE_FIELDS {
             return Err(Error("E_COPY_GRAPH_BUDGET"));
