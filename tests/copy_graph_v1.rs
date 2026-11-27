@@ -196,7 +196,11 @@ fn inherited_mutable_sharing_cannot_bypass_shallow_admission() {
         ty(2, Some(1), vec![field(2, FieldKind::Scalar)]),
         ty(3, None, vec![field(3, FieldKind::Scalar)]),
     ];
-    err(&types, request(2, 1, CopyMode::Shallow, false), "E_COPY_SHALLOW_ALIAS");
+    err(
+        &types,
+        request(2, 1, CopyMode::Shallow, false),
+        "E_COPY_SHALLOW_ALIAS",
+    );
     let plan = admit_copy(&types, request(2, 1, CopyMode::Deep, false)).unwrap();
     assert_eq!(plan.copied_type_ids, vec![1, 2, 3]);
 }
@@ -204,9 +208,15 @@ fn inherited_mutable_sharing_cannot_bypass_shallow_admission() {
 #[test]
 fn shallow_self_cycle_needs_readonly_transition_not_a_type_witness() {
     let types = [ty(1, None, vec![field(1, FieldKind::SharedMutable(1))])];
-    err(&types, request(1, 1, CopyMode::Shallow, false), "E_COPY_SHALLOW_ALIAS");
+    err(
+        &types,
+        request(1, 1, CopyMode::Shallow, false),
+        "E_COPY_SHALLOW_ALIAS",
+    );
     assert_eq!(
-        admit_copy(&types, request(1, 1, CopyMode::Deep, false)).unwrap().copied_type_ids,
+        admit_copy(&types, request(1, 1, CopyMode::Deep, false))
+            .unwrap()
+            .copied_type_ids,
         vec![1],
     );
 }
@@ -214,8 +224,16 @@ fn shallow_self_cycle_needs_readonly_transition_not_a_type_witness() {
 #[test]
 fn unknown_shared_child_is_not_a_valid_shallow_descriptor() {
     for nested in [0, 99] {
-        let types = [ty(1, None, vec![field(1, FieldKind::SharedMutable(nested))])];
-        err(&types, request(1, 1, CopyMode::Shallow, false), "E_COPY_AOT_WITNESS");
+        let types = [ty(
+            1,
+            None,
+            vec![field(1, FieldKind::SharedMutable(nested))],
+        )];
+        err(
+            &types,
+            request(1, 1, CopyMode::Shallow, false),
+            "E_COPY_AOT_WITNESS",
+        );
     }
 }
 
