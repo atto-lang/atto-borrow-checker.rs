@@ -141,3 +141,67 @@ fn nested_binder_name_may_be_reused_only_after_prior_scope_exits() {
     c.bind("a").unwrap();
     c.leave_scope().unwrap();
 }
+
+#[test]
+fn historical_owner_budget_cannot_be_evaded_by_dropping_or_leaving_scopes() {
+    let mut c = Lifetimes::new();
+    c.own(1).unwrap();
+    for id in 2..=4096 {
+        c.enter_scope().unwrap();
+        c.own(id).unwrap();
+        c.drop_owner(id).unwrap();
+        c.leave_scope().unwrap();
+    }
+    assert_eq!(c.own(4097), Err(Error::ScopeBudget));
+    assert_eq!(c.own(2), Err(Error::DuplicateOwner));
+    assert_eq!(c.own(0), Err(Error::DuplicateOwner));
+    assert_eq!(c.borrow_implicit(4097, 1, Shared), Err(Error::UnknownOwner));
+    c.borrow_implicit(1, 1, Shared).unwrap();
+    c.end_borrow(1).unwrap();
+    c.drop_owner(1).unwrap();
+}
+
+#[test]
+fn binder_byte_boundary_is_checked_before_allocation() {
+    let mut c = Lifetimes::new();
+    let valid = "a".repeat(256);
+    let too_long = "a".repeat(257);
+    assert_eq!(c.bind(&too_long), Err(Error::ScopeBudget));
+    assert_eq!(c.bind(&valid), Ok(()));
+    assert_eq!(c.bind(&valid), Err(Error::DuplicateBinder));
+    c.own(1).unwrap();
+    assert_eq!(
+        c.borrow_named(1, 1, Shared, &too_long),
+        Err(Error::UnknownBinder)
+    );
+    c.borrow_named(1, 1, Shared, &valid).unwrap();
+    c.end_borrow(1).unwrap();
+}
+
+#[test]
+fn historical_loan_budget_is_distinct_from_duplicate_and_failed_borrow_is_atomic() {
+    let mut c = Lifetimes::new();
+    c.own(1).unwrap();
+    for loan in 1..=1024 {
+        c.borrow_implicit(1, loan, Shared).unwrap();
+        c.end_borrow(loan).unwrap();
+    }
+    assert_eq!(c.borrow_implicit(1, 1025, Mutable), Err(Error::ScopeBudget));
+    assert_eq!(c.borrow_implicit(1, 1, Shared), Err(Error::DuplicateLoan));
+    assert_eq!(c.end_borrow(1025), Err(Error::UnknownLoan));
+    assert_eq!(c.suspend(), Ok(()));
+    c.drop_owner(1).unwrap();
+}
+
+#[test]
+fn ended_implicit_borrow_releases_owner_without_named_lifetime() {
+    let mut c = Lifetimes::new();
+    c.own(1).unwrap();
+    c.borrow_implicit(1, 1, Shared).unwrap();
+    assert_eq!(c.borrow_implicit(1, 2, Mutable), Err(Error::Conflict));
+    c.end_borrow(1).unwrap();
+    c.borrow_implicit(1, 2, Mutable).unwrap();
+    c.end_borrow(2).unwrap();
+    c.suspend().unwrap();
+    c.drop_owner(1).unwrap();
+}
