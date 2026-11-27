@@ -36,6 +36,13 @@ pub enum Error {
 struct Scope {
     names: Vec<String>,
     owners: Vec<OwnerId>,
+    live_loans: usize,
+}
+#[derive(Debug)]
+struct Owner {
+    depth: usize,
+    shared: usize,
+    exclusive: bool,
 }
 #[derive(Debug)]
 struct Loan {
@@ -50,7 +57,7 @@ struct Loan {
 pub struct Lifetimes {
     scopes: Vec<Scope>,
     binders: BTreeMap<String, usize>,
-    owners: BTreeMap<OwnerId, usize>,
+    owners: BTreeMap<OwnerId, Owner>,
     loans: BTreeMap<LoanId, Loan>,
     seen_owners: BTreeSet<OwnerId>,
     seen_loans: BTreeSet<LoanId>,
@@ -117,8 +124,7 @@ impl Lifetimes {
         if self.scopes.len() == 1 {
             return Err(Error::RootScopeExit);
         }
-        let depth = self.depth();
-        if self.loans.values().any(|l| l.depth >= depth) {
+        if self.scopes.last().expect("root exists").live_loans != 0 {
             return Err(Error::LiveLoanAtExit);
         }
         let ended = self.scopes.pop().expect("checked nonroot scope");
@@ -138,7 +144,14 @@ impl Lifetimes {
             return Err(Error::ScopeBudget);
         }
         self.seen_owners.insert(id);
-        self.owners.insert(id, self.depth());
+        self.owners.insert(
+            id,
+            Owner {
+                depth: self.depth(),
+                shared: 0,
+                exclusive: false,
+            },
+        );
         self.scopes.last_mut().expect("root exists").owners.push(id);
         Ok(())
     }
@@ -170,10 +183,10 @@ impl Lifetimes {
         kind: BorrowKind,
         binder_depth: usize,
     ) -> Result<(), Error> {
-        let owner_depth = *self.owners.get(&owner).ok_or(Error::UnknownOwner)?;
+        let owner_state = self.owners.get(&owner).ok_or(Error::UnknownOwner)?;
         // Lifetime declared outside the owner's lexical storage cannot
         // outlive the owner. This is a conservative outlives constraint.
-        if binder_depth < owner_depth {
+        if binder_depth < owner_state.depth {
             return Err(Error::OutlivesOwner);
         }
         if loan == 0 || self.seen_loans.contains(&loan) {
@@ -183,26 +196,39 @@ impl Lifetimes {
             return Err(Error::ScopeBudget);
         }
         let mutable = kind == BorrowKind::Mutable;
-        if self
-            .loans
-            .values()
-            .any(|l| l.owner == owner && (l.mutable || mutable))
-        {
+        if owner_state.exclusive || (mutable && owner_state.shared != 0) {
             return Err(Error::Conflict);
         }
+        // All fallible admission checks precede updates. Counts are bounded by MAX_LOANS.
+        let depth = self.depth();
+        let owner_state = self.owners.get_mut(&owner).expect("admitted owner");
+        if mutable {
+            owner_state.exclusive = true;
+        } else {
+            owner_state.shared += 1;
+        }
+        self.scopes[depth].live_loans += 1;
         self.seen_loans.insert(loan);
         self.loans.insert(
             loan,
             Loan {
                 owner,
                 mutable,
-                depth: self.depth(),
+                depth,
             },
         );
         Ok(())
     }
     pub fn end_borrow(&mut self, id: LoanId) -> Result<(), Error> {
-        self.loans.remove(&id).map(|_| ()).ok_or(Error::UnknownLoan)
+        let loan = self.loans.remove(&id).ok_or(Error::UnknownLoan)?;
+        let owner = self.owners.get_mut(&loan.owner).expect("live loan owner");
+        if loan.mutable {
+            owner.exclusive = false;
+        } else {
+            owner.shared -= 1;
+        }
+        self.scopes[loan.depth].live_loans -= 1;
+        Ok(())
     }
     /// Return signatures that prove longer outlives relations are a later
     /// profile. V1 never allows an arbitrary borrowed local to escape.
@@ -220,10 +246,8 @@ impl Lifetimes {
         }
     }
     pub fn drop_owner(&mut self, owner: OwnerId) -> Result<(), Error> {
-        if !self.owners.contains_key(&owner) {
-            return Err(Error::UnknownOwner);
-        }
-        if self.loans.values().any(|loan| loan.owner == owner) {
+        let state = self.owners.get(&owner).ok_or(Error::UnknownOwner)?;
+        if state.exclusive || state.shared != 0 {
             return Err(Error::CannotDropBorrowedOwner);
         }
         self.owners.remove(&owner);

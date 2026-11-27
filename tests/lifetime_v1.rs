@@ -205,3 +205,64 @@ fn ended_implicit_borrow_releases_owner_without_named_lifetime() {
     c.suspend().unwrap();
     c.drop_owner(1).unwrap();
 }
+
+#[test]
+fn owner_loan_counts_are_independent_and_release_only_the_matching_loan() {
+    let mut c = Lifetimes::new();
+    for owner in 1..=128 {
+        c.own(owner).unwrap();
+        c.borrow_implicit(owner, owner, Shared).unwrap();
+    }
+    c.borrow_implicit(1, 129, Shared).unwrap();
+    c.end_borrow(1).unwrap();
+    assert_eq!(c.borrow_implicit(1, 130, Mutable), Err(Error::Conflict));
+    assert_eq!(c.drop_owner(1), Err(Error::CannotDropBorrowedOwner));
+    c.end_borrow(129).unwrap();
+    c.borrow_implicit(1, 130, Mutable).unwrap();
+    assert_eq!(c.borrow_implicit(1, 131, Shared), Err(Error::Conflict));
+    c.end_borrow(130).unwrap();
+    c.drop_owner(1).unwrap();
+    assert_eq!(c.drop_owner(2), Err(Error::CannotDropBorrowedOwner));
+    for owner in 2..=128 {
+        c.end_borrow(owner).unwrap();
+        c.drop_owner(owner).unwrap();
+    }
+    assert_eq!(c.suspend(), Ok(()));
+}
+
+#[test]
+fn loan_scope_counts_follow_issue_depth_even_when_ended_in_a_child() {
+    let mut c = Lifetimes::new();
+    c.own(1).unwrap();
+    c.bind("outer").unwrap();
+    c.borrow_implicit(1, 1, Shared).unwrap();
+    c.enter_scope().unwrap();
+    c.borrow_named(1, 2, Shared, "outer").unwrap();
+    c.enter_scope().unwrap();
+    c.end_borrow(1).unwrap();
+    c.leave_scope().unwrap();
+    assert_eq!(c.leave_scope(), Err(Error::LiveLoanAtExit));
+    assert_eq!(c.end_borrow(1), Err(Error::UnknownLoan));
+    c.end_borrow(2).unwrap();
+    c.leave_scope().unwrap();
+    c.borrow_implicit(1, 3, Mutable).unwrap();
+    c.end_borrow(3).unwrap();
+    c.drop_owner(1).unwrap();
+}
+
+#[test]
+fn unrelated_scope_can_exit_with_outer_exclusive_loan() {
+    let mut c = Lifetimes::new();
+    c.own(1).unwrap();
+    c.borrow_implicit(1, 1, Mutable).unwrap();
+    c.enter_scope().unwrap();
+    c.own(2).unwrap();
+    c.borrow_implicit(2, 2, Mutable).unwrap();
+    assert_eq!(c.leave_scope(), Err(Error::LiveLoanAtExit));
+    c.end_borrow(2).unwrap();
+    c.leave_scope().unwrap();
+    assert_eq!(c.drop_owner(2), Err(Error::UnknownOwner));
+    assert_eq!(c.drop_owner(1), Err(Error::CannotDropBorrowedOwner));
+    c.end_borrow(1).unwrap();
+    c.drop_owner(1).unwrap();
+}
