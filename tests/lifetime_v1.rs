@@ -345,3 +345,79 @@ fn malformed_or_unbacked_signature_and_return_census_fail_closed() {
         Err(Budget)
     );
 }
+
+use atto_borrow_checker::lifetime_v1::CallerLoanInterval;
+
+fn interval(first: u32, last: u32, mutable: bool) -> CallerLoanInterval {
+    CallerLoanInterval {
+        first,
+        last,
+        mutable,
+    }
+}
+
+#[test]
+fn caller_result_region_is_the_intersection_of_named_origins() {
+    let formals = [formal(Some(0), false), formal(Some(0), false)];
+    let contract = resolve_return_contract(1, &formals, formal(Some(0), false)).unwrap();
+    let inputs = [interval(0, 20, false), interval(1, 10, false)];
+    assert_eq!(contract.check_call_interval(&inputs, 2, 4, 10), Ok(10));
+    assert_eq!(
+        contract.check_call_interval(&inputs, 2, 4, 11),
+        Err(ReturnContractError::ResultOutlivesInput)
+    );
+    assert_eq!(
+        contract.check_call_interval(&[inputs[1], inputs[0]], 2, 4, 10),
+        Ok(10)
+    );
+}
+
+#[test]
+fn unrelated_input_covers_invocation_but_does_not_shorten_result() {
+    let formals = [formal(Some(0), false), formal(Some(1), true)];
+    let contract = resolve_return_contract(2, &formals, formal(Some(0), false)).unwrap();
+    assert_eq!(
+        contract.check_call_interval(&[interval(0, 20, false), interval(0, 4, true)], 2, 4, 20),
+        Ok(20)
+    );
+    assert_eq!(
+        contract.check_call_interval(&[interval(0, 20, false), interval(0, 3, true)], 2, 4, 4),
+        Err(ReturnContractError::InputNotLive)
+    );
+    assert_eq!(
+        contract.check_call_interval(&[interval(0, 20, false), interval(0, 4, false)], 2, 4, 4),
+        Err(ReturnContractError::Mutability)
+    );
+}
+
+#[test]
+fn caller_region_admission_rejects_malformed_or_incomplete_intervals() {
+    use ReturnContractError::*;
+    let contract = resolve_return_contract(0, &[formal(None, true)], formal(None, true)).unwrap();
+    let live = [interval(0, u32::MAX, true)];
+    assert_eq!(
+        contract.check_call_interval(&live, 1, 2, u32::MAX),
+        Ok(u32::MAX)
+    );
+    assert_eq!(contract.check_call_interval(&[], 1, 2, 2), Err(Arity));
+    assert_eq!(
+        contract.check_call_interval(&live, 2, 1, 2),
+        Err(InvalidInterval)
+    );
+    assert_eq!(
+        contract.check_call_interval(&live, 1, 2, 1),
+        Err(InvalidInterval)
+    );
+    assert_eq!(
+        contract.check_call_interval(&[interval(2, 1, true)], 1, 2, 2),
+        Err(InvalidInterval)
+    );
+    assert_eq!(
+        contract.check_call_interval(&[interval(2, 3, true)], 1, 2, 2),
+        Err(InputNotLive)
+    );
+    assert_eq!(
+        contract.check_call_interval(&vec![live[0]; 1025], 1, 2, 2),
+        Err(Budget)
+    );
+}

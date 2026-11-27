@@ -275,6 +275,10 @@ pub enum ReturnContractError {
     InvalidOrigin,
     Mutability,
     NoReturnEvidence,
+    Arity,
+    InvalidInterval,
+    InputNotLive,
+    ResultOutlivesInput,
 }
 
 /// A conservative summary of allowed input origins, not a proof of a function
@@ -283,6 +287,7 @@ pub enum ReturnContractError {
 #[derive(Debug, PartialEq, Eq)]
 pub struct ReturnContract {
     allowed: Vec<usize>,
+    input_mutable: Vec<bool>,
 }
 
 impl ReturnContract {
@@ -348,5 +353,65 @@ pub fn resolve_return_contract(
     if output.mutable && allowed.iter().any(|&index| !inputs[index].mutable) {
         return Err(Mutability);
     }
-    Ok(ReturnContract { allowed })
+    Ok(ReturnContract {
+        allowed,
+        input_mutable: inputs.iter().map(|formal| formal.mutable).collect(),
+    })
+}
+
+/// Compiler-supplied inclusive loan interval in a single straight-line
+/// synchronous caller trace. These facts must be established independently
+/// by the caller's typed ownership verifier, not accepted from guest input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CallerLoanInterval {
+    pub first: u32,
+    pub last: u32,
+    pub mutable: bool,
+}
+
+impl ReturnContract {
+    /// Instantiate a return bound from every signature-permitted origin.
+    /// All inputs must cover the entire invocation, even those excluded
+    /// from the result. The result can never extend a caller's loan.
+    /// No CFG ordering, alias independence, call effect, pinning, or
+    /// authentication is inferred here; this model is not codegen authority.
+    pub fn check_call_interval(
+        &self,
+        inputs: &[CallerLoanInterval],
+        call_first: u32,
+        call_last: u32,
+        result_last: u32,
+    ) -> Result<u32, ReturnContractError> {
+        use ReturnContractError::*;
+        if inputs.len() > MAX_SIGNATURE_INPUTS {
+            return Err(Budget);
+        }
+        if inputs.len() != self.input_mutable.len() {
+            return Err(Arity);
+        }
+        if call_first > call_last || result_last < call_last {
+            return Err(InvalidInterval);
+        }
+        for (loan, &requires_mutable) in inputs.iter().zip(&self.input_mutable) {
+            if loan.first > loan.last {
+                return Err(InvalidInterval);
+            }
+            if loan.first > call_first || loan.last < call_last {
+                return Err(InputNotLive);
+            }
+            if requires_mutable && !loan.mutable {
+                return Err(Mutability);
+            }
+        }
+        let bound = self
+            .allowed
+            .iter()
+            .map(|&index| inputs[index].last)
+            .min()
+            .ok_or(NoInput)?;
+        if result_last > bound {
+            return Err(ResultOutlivesInput);
+        }
+        Ok(bound)
+    }
 }
