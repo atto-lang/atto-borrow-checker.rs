@@ -268,9 +268,14 @@ fn aggregate_flattened_field_budget_is_atomic_and_context_can_retry() {
         original.push(node(1, fields));
     }
     let existing = node(1, vec![]);
-    let mut destination = Arena { nodes: vec![existing.clone()] };
+    let mut destination = Arena {
+        nodes: vec![existing.clone()],
+    };
     let mut ctx = GraphCopyContext::new(&types, &original, &mut destination, 4).unwrap();
-    assert_eq!(ctx.copy_root(0, 1, false), Err(Error("E_COPY_GRAPH_BUDGET")));
+    assert_eq!(
+        ctx.copy_root(0, 1, false),
+        Err(Error("E_COPY_GRAPH_BUDGET"))
+    );
     // Exactly at the field limit: retry must not retain the failed copy's
     // field charges, memo entries, or shell allocations.
     assert_eq!(ctx.copy_root(1, 1, false).unwrap(), 1);
@@ -285,11 +290,18 @@ fn aggregate_flattened_field_budget_is_atomic_and_context_can_retry() {
 fn repeated_aliases_do_not_charge_the_same_runtime_node_twice() {
     let width = MAX_CLONE_FIELDS - 2;
     let types = [
-        ty(1, None, &[FieldKind::OwnedMutable(2), FieldKind::OwnedMutable(2)]),
+        ty(
+            1,
+            None,
+            &[FieldKind::OwnedMutable(2), FieldKind::OwnedMutable(2)],
+        ),
         ty(2, None, &vec![FieldKind::Scalar; width]),
     ];
     let original = Arena {
-        nodes: vec![node(1, vec![child(1), child(1)]), node(2, vec![scalar(42); width])],
+        nodes: vec![
+            node(1, vec![child(1), child(1)]),
+            node(2, vec![scalar(42); width]),
+        ],
     };
     let mut destination = Arena::default();
     GraphCopyContext::new(&types, &original, &mut destination, 4)
