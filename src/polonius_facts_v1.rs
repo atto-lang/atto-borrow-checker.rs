@@ -78,7 +78,7 @@ fn charge(steps: &mut usize, cost: usize, point: PointId) -> Result<(), Error> {
     }
     Ok(())
 }
-fn preflight(facts: &Facts) -> Result<BTreeMap<PointId, &Point>, Error> {
+fn preflight(facts: &Facts, infer_liveness: bool) -> Result<BTreeMap<PointId, &Point>, Error> {
     if facts.entry == 0 || facts.points.is_empty() || facts.points.len() > MAX_POINTS {
         return Err(error(Code::InvalidGraph, facts.entry));
     }
@@ -90,6 +90,9 @@ fn preflight(facts: &Facts) -> Result<BTreeMap<PointId, &Point>, Error> {
     let mut fact_count = 0usize;
     // Bound untrusted input before creating a reachability worklist.
     for p in &facts.points {
+        if infer_liveness && !p.live_origins.is_empty() {
+            return Err(error(Code::InvalidFact, p.id));
+        }
         if p.id == 0 || points.insert(p.id, p).is_some() {
             return Err(error(Code::InvalidGraph, p.id));
         }
@@ -137,9 +140,10 @@ fn preflight(facts: &Facts) -> Result<BTreeMap<PointId, &Point>, Error> {
             origins.insert(to);
         }
         for &(origin, loan) in &p.issue {
-            if origin == 0 || loan == 0 || !live.contains(&origin) {
+            if origin == 0 || loan == 0 || (!infer_liveness && !live.contains(&origin)) {
                 return Err(error(Code::InvalidFact, p.id));
             }
+            origins.insert(origin);
             if !issued.insert(loan) {
                 return Err(error(Code::DuplicateFact, p.id));
             }
@@ -196,7 +200,7 @@ fn preflight(facts: &Facts) -> Result<BTreeMap<PointId, &Point>, Error> {
 /// Incorrect origin liveness, exceptional edges or invalidation inventory may
 /// cause false acceptance. The caller must prove all three independently.
 pub fn analyze(facts: &Facts) -> Result<Report, Error> {
-    let points = preflight(facts)?;
+    let points = preflight(facts, false)?;
     type Pair = (OriginId, LoanId);
     let mut incoming: BTreeMap<PointId, BTreeSet<Pair>> =
         points.keys().map(|&p| (p, BTreeSet::new())).collect();
@@ -351,49 +355,27 @@ pub fn analyze_with_inferred_liveness(
         }
     }
 
-    let mut points = BTreeMap::new();
+    // Validate the complete graph and raw loan identities before allocating
+    // inference state. Only issuance liveness is deferred to the forward pass.
+    let points = preflight(template, true)?;
     let mut predecessors: BTreeMap<PointId, Vec<PointId>> = BTreeMap::new();
     let mut live: BTreeMap<PointId, BTreeSet<OriginId>> = BTreeMap::new();
     let mut origins = BTreeSet::new();
     let mut declared_origins = BTreeSet::new();
-    let mut edge_count = 0usize;
 
     for point in &template.points {
-        if point.id == 0
-            || !point.live_origins.is_empty()
-            || points.insert(point.id, point).is_some()
-        {
-            return Err(error(Code::InvalidFact, point.id));
-        }
         predecessors.insert(point.id, Vec::new());
         live.insert(point.id, BTreeSet::new());
-        edge_count = edge_count
-            .checked_add(point.successors.len())
-            .ok_or_else(|| error(Code::Budget, point.id))?;
-        if edge_count > MAX_EDGES {
-            return Err(error(Code::Budget, point.id));
-        }
         for &(origin, _) in &point.issue {
-            if origin == 0 {
-                return Err(error(Code::InvalidFact, point.id));
-            }
-            origins.insert(origin);
             declared_origins.insert(origin);
         }
         for &(from, to) in &point.subset {
-            if from == 0 || to == 0 {
-                return Err(error(Code::InvalidFact, point.id));
-            }
-            origins.insert(from);
-            origins.insert(to);
             declared_origins.insert(from);
             declared_origins.insert(to);
         }
     }
+    origins.extend(declared_origins.iter().copied());
 
-    if template.entry == 0 || !points.contains_key(&template.entry) {
-        return Err(error(Code::InvalidGraph, template.entry));
-    }
     // Enforce the finite graph budget before allocating predecessor lists.
     for point in &template.points {
         for &succ in &point.successors {
@@ -598,6 +580,60 @@ mod inference_preflight_tests {
                 code: Code::InvalidatedLoan,
                 point: 2,
                 loan: Some(1),
+            })
+        );
+    }
+
+    #[test]
+    fn malformed_graph_is_rejected_before_inference() {
+        let first = point(1, vec![2, 2]);
+        let second = point(2, Vec::new());
+        let template = Facts {
+            entry: 1,
+            points: vec![first, second],
+        };
+        assert_eq!(
+            analyze_with_inferred_liveness(&template, &[]),
+            Err(error(Code::InvalidGraph, 1))
+        );
+
+        let template = Facts {
+            entry: 1,
+            points: vec![point(1, Vec::new()), point(2, Vec::new())],
+        };
+        assert_eq!(
+            analyze_with_inferred_liveness(&template, &[]),
+            Err(error(Code::UnreachablePoint, 2))
+        );
+    }
+
+    #[test]
+    fn malformed_loan_identities_are_rejected_before_inference() {
+        let mut first = point(1, vec![2]);
+        first.issue.push((1, 1));
+        let mut second = point(2, Vec::new());
+        second.issue.push((2, 1));
+        let template = Facts {
+            entry: 1,
+            points: vec![first.clone(), second.clone()],
+        };
+        assert_eq!(
+            analyze_with_inferred_liveness(&template, &[]),
+            Err(error(Code::DuplicateFact, 2))
+        );
+
+        second.issue.clear();
+        second.invalidate.push(99);
+        let template = Facts {
+            entry: 1,
+            points: vec![first, second],
+        };
+        assert_eq!(
+            analyze_with_inferred_liveness(&template, &[]),
+            Err(Error {
+                code: Code::UnknownLoan,
+                point: 2,
+                loan: Some(99),
             })
         );
     }
