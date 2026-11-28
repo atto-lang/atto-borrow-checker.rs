@@ -108,6 +108,7 @@ pub const REGISTRY: &[CodeInfo] = &[
         &["E_COPY_SHALLOW_ALIAS", "E_MOVED"],
     ),
     semantic("E_DEEP_COPY_PROOF_REQUIRED", &["E_COPY_GRAPH_UNPROVEN"]),
+    semantic("E_DETACHED_COPY_PROOF_REQUIRED", &["E_COPY_SHALLOW_ALIAS"]),
     // Loans.
     semantic("E_BORROW_CONFLICT", &["E_BORROW", "E_SHARE_ALIAS"]),
     semantic("E_MUT_LOAN_REQUIRED", &["E_BORROW", "E_MUTABILITY"]),
@@ -150,6 +151,7 @@ pub const REGISTRY: &[CodeInfo] = &[
     of("E_LOAN_ID_REUSED", CodeClass::Adapter),
     of("E_LOAN_ID_ZERO", CodeClass::Adapter),
     of("E_UNKNOWN_LOAN", CodeClass::Adapter),
+    of("E_LOAN_NOT_ACTIVE_OR_WRONG_OWNER", CodeClass::Adapter),
     of("E_REGION_DEF_REUSED", CodeClass::Adapter),
     of("E_REGION_ID_ZERO", CodeClass::Adapter),
     of("E_WEAK_DEF_REUSED", CodeClass::Adapter),

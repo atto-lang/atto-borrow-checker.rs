@@ -470,6 +470,7 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
                 return Err(bad("E_OWNER_ID_REUSED_OR_BUDGET"));
             }
             let traits = source.traits;
+            let frozen = source.frozen;
             let acquisition = next_acquisition(state);
             state.ever_owned.insert(into);
             state.live.insert(
@@ -477,6 +478,9 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
                 Owner {
                     traits,
                     acquisition,
+                    frozen,
+                    // Detached copy has its own allocation, not the source pin.
+                    pinned: false,
                 },
             );
         }
@@ -1088,6 +1092,16 @@ fn verify_internal(
 
 /// Versioned typed-MIR producer envelope for differential compiler adapters.
 pub mod mir_v1;
+
+/// Model-only static field/witness admission for copy! and copy!!.
+/// Per-backend codegen, Sendable authentication, real graph cloning and AOT
+/// runtime remain separate and must be independently verified.
+pub mod copy_graph_v1;
+
+/// Model-only bounded graph copy context with per-invocation identity memo,
+/// base/private field traversal and transactional failed-copy cleanup.
+/// Not linked to production guest-Wasm or actor mailboxes.
+pub mod graph_copy_runtime_v1;
 
 /// Typed ownership-bang source-to-MIR inventory and stricter authority gate.
 pub mod ownership_bang_v1;
