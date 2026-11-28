@@ -514,6 +514,16 @@ pub fn decode_op(value: &Json, at: &str) -> Result<WireOp, WireError> {
                 }
             },
         },
+        "ReadThrough" => Op::ReadThrough {
+            owner: f.u32("owner")?,
+            loan: f.u32("loan")?,
+        },
+        "CopyThrough" => Op::CopyThrough {
+            owner: f.u32("owner")?,
+            loan: f.u32("loan")?,
+            into: f.u32("into")?,
+            detached_proven: f.bool("detachedProven")?,
+        },
         "WriteThrough" => Op::WriteThrough {
             owner: f.u32("owner")?,
             loan: f.u32("loan")?,
@@ -635,6 +645,23 @@ pub fn encode_op(op: &Op) -> Json {
                     BorrowKind::Mutable => "Mutable",
                 }),
             ),
+        ],
+        Op::ReadThrough { owner, loan } => vec![
+            ("op", s("ReadThrough")),
+            ("owner", n(owner)),
+            ("loan", n(loan)),
+        ],
+        Op::CopyThrough {
+            owner,
+            loan,
+            into,
+            detached_proven,
+        } => vec![
+            ("op", s("CopyThrough")),
+            ("owner", n(owner)),
+            ("loan", n(loan)),
+            ("into", n(into)),
+            ("detachedProven", b(detached_proven)),
         ],
         Op::WriteThrough { owner, loan } => vec![
             ("op", s("WriteThrough")),

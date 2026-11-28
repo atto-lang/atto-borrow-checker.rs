@@ -470,6 +470,7 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
                 return Err(bad("E_OWNER_ID_REUSED_OR_BUDGET"));
             }
             let traits = source.traits;
+            let frozen = source.frozen;
             let acquisition = next_acquisition(state);
             state.ever_owned.insert(into);
             state.live.insert(
@@ -477,6 +478,9 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
                 Owner {
                     traits,
                     acquisition,
+                    frozen,
+                    // Detached copy has its own allocation, not the source pin.
+                    pinned: false,
                 },
             );
         }
