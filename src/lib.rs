@@ -87,9 +87,24 @@ pub enum Op {
         loan: LoanId,
         kind: BorrowKind,
     },
+    /// Access only through a live loan, not through an outstanding owner alias.
+    ReadThrough {
+        owner: OwnerId,
+        loan: LoanId,
+    },
     WriteThrough {
         owner: OwnerId,
         loan: LoanId,
+    },
+    /// Detached Copy snapshot through an existing shared or mutable loan.
+    /// It grants no Share/Take authority over the borrowed root.
+    CopyThrough {
+        owner: OwnerId,
+        loan: LoanId,
+        into: OwnerId,
+        /// An independently derived proof that this copy is a detached value,
+        /// not a copy of an address/borrowed capability into a new owner.
+        detached_proven: bool,
     },
     EndBorrow {
         loan: LoanId,
@@ -245,7 +260,9 @@ fn shadow_kind(op: &Op) -> (&'static str, Option<OwnerId>) {
             kind: BorrowKind::Mutable,
             ..
         } => ("BORROW_MUT", Some(owner)),
+        Op::ReadThrough { owner, .. } => ("READ_VIA_LOAN", Some(owner)),
         Op::WriteThrough { owner, .. } => ("WRITE_VIA_MUT", Some(owner)),
+        Op::CopyThrough { owner, .. } => ("COPY_VIA_LOAN", Some(owner)),
         Op::EndBorrow { .. } => ("END_BORROW", None),
         Op::Move { from, .. } => ("MOVE", Some(from)),
         Op::Copy { from, .. } => ("COPY", Some(from)),
@@ -340,7 +357,9 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
         Op::Read { owner }
         | Op::Write { owner }
         | Op::Borrow { owner, .. }
+        | Op::ReadThrough { owner, .. }
         | Op::WriteThrough { owner, .. }
+        | Op::CopyThrough { owner, .. }
         | Op::Drop { owner }
         | Op::PinStorage { owner, .. }
         | Op::RelocateStorage { owner }
@@ -419,6 +438,47 @@ fn apply(state: &mut State, op: &Op, block: BlockId, index: usize) -> Result<(),
             }
             state.ever_loaned.insert(loan);
             state.loans.insert(loan, Loan { owner, kind });
+        }
+        Op::ReadThrough { owner, loan } => {
+            if !is_live(state, owner) {
+                return Err(bad("E_USE_AFTER_MOVE_OR_DROP"));
+            }
+            if !matches!(state.loans.get(&loan), Some(Loan { owner: o, .. }) if *o == owner) {
+                return Err(bad("E_LOAN_NOT_ACTIVE_OR_WRONG_OWNER"));
+            }
+        }
+        Op::CopyThrough {
+            owner,
+            loan,
+            into,
+            detached_proven,
+        } => {
+            let source = state
+                .live
+                .get(&owner)
+                .ok_or_else(|| bad("E_USE_AFTER_MOVE_OR_DROP"))?;
+            if !matches!(state.loans.get(&loan), Some(Loan { owner: o, .. }) if *o == owner) {
+                return Err(bad("E_LOAN_NOT_ACTIVE_OR_WRONG_OWNER"));
+            }
+            if !source.traits.is_copy {
+                return Err(bad("E_COPY_PROOF_REQUIRED"));
+            }
+            if !detached_proven {
+                return Err(bad("E_DETACHED_COPY_PROOF_REQUIRED"));
+            }
+            if !fresh_destination(state, into) {
+                return Err(bad("E_OWNER_ID_REUSED_OR_BUDGET"));
+            }
+            let traits = source.traits;
+            let acquisition = next_acquisition(state);
+            state.ever_owned.insert(into);
+            state.live.insert(
+                into,
+                Owner {
+                    traits,
+                    acquisition,
+                },
+            );
         }
         Op::WriteThrough { owner, loan } => {
             if !is_live(state, owner) {
@@ -1038,6 +1098,9 @@ pub mod copy_graph_v1;
 /// base/private field traversal and transactional failed-copy cleanup.
 /// Not linked to production guest-Wasm or actor mailboxes.
 pub mod graph_copy_runtime_v1;
+
+/// Typed ownership-bang source-to-MIR inventory and stricter authority gate.
+pub mod ownership_bang_v1;
 
 /// Explicit field-projection/loop model; not an implicit V0 or MIR upgrade.
 pub mod cyclic_v1;
